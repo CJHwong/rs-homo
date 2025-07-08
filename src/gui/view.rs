@@ -66,7 +66,7 @@ impl WebViewDelegate for LinkOpenerDelegate {
     fn on_message(&self, name: &str, body: &str) {
         if name == "linkClicked" {
             let url = body;
-            println!("[INFO] Opening external link: {}", url);
+            println!("[INFO] Opening external link: {url}");
             open::that(url).ok();
         }
     }
@@ -84,7 +84,7 @@ impl MarkdownView {
         // CORRECTED: Use the correct enum variant `InjectAt::Start`.
         config.add_user_script(LINK_INTERCEPTOR_JS, InjectAt::Start, false);
 
-        let delegate = LinkOpenerDelegate::default();
+        let delegate = LinkOpenerDelegate;
         let webview = WebView::with(config, delegate);
 
         MarkdownView { webview }
@@ -92,8 +92,7 @@ impl MarkdownView {
 
     pub fn update_content(&self, html_content: &str) {
         let full_html = format!(
-            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>{}</style></head><body onload=\"window.scrollTo(0, document.body.scrollHeight);\">{}</body></html>",
-            STYLESHEET, html_content
+            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>{STYLESHEET}</style></head><body onload=\"window.scrollTo(0, document.body.scrollHeight);\">{html_content}</body></html>"
         );
         self.webview.load_html(&full_html);
     }

@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (sender, receiver) = mpsc::channel::<String>();
         thread::spawn(move || {
             if let Err(e) = streaming::read_from_pipe(sender) {
-                eprintln!("[ERROR] Streaming thread failed: {}", e);
+                eprintln!("[ERROR] Streaming thread failed: {e}");
             }
         });
         gui::run_app(Some(receiver));
