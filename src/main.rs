@@ -1,6 +1,7 @@
 //! Entry point for the Markdown Viewer application.
 //! Handles both GUI and streaming (pipe) modes.
 
+use std::env;
 use std::sync::mpsc;
 use std::thread;
 
@@ -10,13 +11,24 @@ mod markdown;
 mod streaming;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // If stdin is a TTY, launch the GUI without streaming.
-    if atty::is(atty::Stream::Stdin) {
-        println!("No pipe detected. Opening an empty window.");
-        gui::run_app(None);
+    let args: Vec<String> = env::args().collect();
+    // If a filename is provided as an argument, use file mode.
+    if args.len() > 1 {
+        let filename = &args[1];
+        println!("File argument detected: {filename}. Setting up file mode.");
+        let (sender, receiver) = mpsc::channel::<String>();
+        let filename = filename.clone();
+        thread::spawn(move || {
+            if let Err(e) = streaming::read_from_file(sender, &filename) {
+                eprintln!("[ERROR] File streaming thread failed: {e}");
+            }
+        });
+        gui::run_app(Some(receiver));
+    } else if atty::is(atty::Stream::Stdin) {
+        println!("No pipe or file argument detected. Please provide a markdown file as an argument or pipe input. Exiting.");
+        return Ok(());
     } else {
         println!("Pipe detected. Setting up streaming mode.");
-        // Set up a channel for streaming markdown updates from stdin to the GUI.
         let (sender, receiver) = mpsc::channel::<String>();
         thread::spawn(move || {
             if let Err(e) = streaming::read_from_pipe(sender) {

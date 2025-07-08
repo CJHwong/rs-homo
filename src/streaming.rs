@@ -2,6 +2,7 @@
 
 use crate::error::AppError;
 use crate::markdown;
+use std::fs::File;
 use std::io::{self, Read};
 use std::sync::mpsc;
 
@@ -34,5 +35,17 @@ pub fn read_from_pipe(sender: mpsc::Sender<String>) -> Result<(), AppError> {
         }
     }
 
+    Ok(())
+}
+
+/// Reads the entire file, parses markdown, and sends HTML to the GUI.
+pub fn read_from_file(sender: mpsc::Sender<String>, filename: &str) -> Result<(), AppError> {
+    let mut file = File::open(filename)?;
+    let mut buffer = String::new();
+    file.read_to_string(&mut buffer)?;
+
+    let html_content = markdown::parse_markdown(&buffer);
+    // If the receiver is disconnected, exit gracefully.
+    let _ = sender.send(html_content);
     Ok(())
 }

@@ -1,6 +1,6 @@
 # HOMO: Hoss' Opinionated Markdown Output
 
-A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it or launch an empty window for quick previews. Built with [cacao](https://github.com/PistonDevelopers/cacao) and [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark).
+A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it, open a file directly, or launch an empty window for quick previews. Built with [cacao](https://github.com/PistonDevelopers/cacao) and [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark).
 
 ---
 
@@ -8,6 +8,7 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 
 - **Native macOS GUI** (AppKit/WebView)
 - **Live streaming**: Pipe Markdown to stdin and see live updates
+- **Open files directly**: Pass a markdown file as an argument to view it instantly
 - **GitHub-flavored Markdown**: Tables, footnotes, strikethrough, task lists
 - **External link handling**: Opens links in your browser
 
@@ -50,10 +51,10 @@ Or stream a file:
 tail -f README.md | homo
 ```
 
-### Launch an empty window
+### Open a Markdown file directly
 
 ```sh
-homo
+homo README.md
 ```
 
 ---
