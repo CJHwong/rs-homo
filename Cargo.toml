@@ -2,7 +2,14 @@
 name = "homo"
 description = "Hoss' Opinionated Markdown Output"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+authors = ["Chuan-Jhe Huang <cjhwong@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/CJHwong/rs-homo"
+repository = "https://github.com/CJHwong/rs-homo"
+keywords = ["markdown"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 # We need to add the "webview" feature to enable the WebView component.

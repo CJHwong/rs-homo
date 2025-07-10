@@ -1,7 +1,7 @@
 use crate::content::DocumentContent;
 use crate::gui::view::MarkdownView;
-use cacao::appkit::window::{Window, WindowConfig, WindowStyle};
 use cacao::appkit::App;
+use cacao::appkit::window::{Window, WindowConfig, WindowStyle};
 
 /// Calculates optimal window size based on content characteristics
 fn calculate_window_size(content: &DocumentContent, is_pipe_mode: bool) -> (f64, f64) {

@@ -28,7 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         gui::run_app(Some(receiver), false); // File mode
     } else if atty::is(atty::Stream::Stdin) {
-        println!("No pipe or file argument detected. Please provide a markdown file as an argument or pipe input. Exiting.");
+        println!(
+            "No pipe or file argument detected. Please provide a markdown file as an argument or pipe input. Exiting."
+        );
         return Ok(());
     } else {
         println!("Pipe detected. Setting up streaming mode.");
