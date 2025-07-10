@@ -2,6 +2,10 @@
 
 A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it, open a file directly, or launch an empty window for quick previews. Built with [cacao](https://github.com/PistonDevelopers/cacao) and [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark).
 
+## Screenshot
+
+![HOMO App Screenshot](./screenshots/screenshot.jpg)
+
 ---
 
 ## Features
@@ -16,16 +20,32 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 
 ## Install
 
-### Prerequisites
+### Download Pre-built Binary (Recommended)
+
+Download the latest release for your platform from the [releases page](https://github.com/yourusername/homo/releases):
+
+- **macOS (Intel)**: `homo-macos-amd64`
+- **macOS (Apple Silicon)**: `homo-macos-arm64`
+
+Then make it executable and add to your PATH:
+
+```sh
+chmod +x homo-macos-arm64
+sudo mv homo-macos-arm64 /usr/local/bin/homo
+```
+
+### Build from Source
+
+#### Prerequisites
 
 - Rust (latest stable, [install here](https://rustup.rs/))
 - macOS 11+ (Apple Silicon or Intel)
 
-### Build & Install
+#### Build & Install
 
 ```sh
 # Clone the repo
-$ git clone https://github.com/yourname/homo.git
+$ git clone https://github.com/CJHwong/homo.git
 $ cd homo
 
 # Build the app
