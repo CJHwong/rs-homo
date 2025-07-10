@@ -9,7 +9,7 @@ use cacao::appkit::{App, AppDelegate};
 
 use crate::content::DocumentContent;
 use crate::gui::view::{MarkdownView, ScrollBehavior};
-use crate::gui::window::create_main_window;
+use crate::gui::window::{create_main_window, create_main_window_with_content};
 use crate::menu::{self, MenuMessage};
 
 /// Handles the main window and markdown content updates.
@@ -96,7 +96,11 @@ impl AppDelegate for GuiDelegate {
                 if self.window.borrow().is_none() {
                     println!("[INFO] First message received. Creating window...");
                     self.setup_menu(); // Set up menu when creating first window
-                    let window = create_main_window(&self.view);
+                    let window = create_main_window_with_content(
+                        &self.view,
+                        &document_content,
+                        self.is_pipe_mode,
+                    );
 
                     // Choose scroll behavior based on mode
                     let scroll_behavior = if self.is_pipe_mode {
