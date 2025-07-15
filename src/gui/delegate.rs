@@ -1,8 +1,14 @@
 //! Implements the application delegate for the GUI lifecycle and message handling.
 
+#![allow(unexpected_cfgs)] // Suppress objc crate cfg warnings
+#![allow(deprecated)] // Suppress cocoa crate deprecation warnings until objc2 ecosystem is mature
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{self};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
@@ -16,11 +22,11 @@ use crate::menu::{self, MenuMessage};
 pub struct GuiDelegate {
     window: RefCell<Option<Window>>,
     view: Rc<MarkdownView>,
-    receiver: Option<mpsc::Receiver<DocumentContent>>,
     menu_setup: RefCell<bool>,
     current_document: RefCell<Option<DocumentContent>>,
     menu_receiver: RefCell<Option<mpsc::Receiver<MenuMessage>>>,
     is_pipe_mode: bool,
+    pending_content: Arc<Mutex<Option<DocumentContent>>>,
 }
 
 impl GuiDelegate {
@@ -30,14 +36,29 @@ impl GuiDelegate {
         let (menu_sender, menu_receiver) = mpsc::channel();
         menu::set_menu_sender(menu_sender);
 
+        // Create shared state for pending content
+        let pending_content = Arc::new(Mutex::new(None));
+
+        // Start background thread to continuously poll original receiver
+        if let Some(orig_receiver) = receiver {
+            let pending_content_clone = pending_content.clone();
+            thread::spawn(move || {
+                while let Ok(content) = orig_receiver.recv() {
+                    if let Ok(mut pending) = pending_content_clone.lock() {
+                        *pending = Some(content);
+                    }
+                }
+            });
+        }
+
         GuiDelegate {
             window: RefCell::new(None),
             view: Rc::new(MarkdownView::new()),
-            receiver,
             menu_setup: RefCell::new(false),
             current_document: RefCell::new(None),
             menu_receiver: RefCell::new(Some(menu_receiver)),
             is_pipe_mode,
+            pending_content,
         }
     }
 
@@ -61,19 +82,62 @@ impl GuiDelegate {
             self.view.update_content(current_document);
         }
     }
+
+    /// Force the event loop to stay active by posting periodic events
+    fn start_background_polling(&self) {
+        thread::spawn(|| {
+            loop {
+                thread::sleep(Duration::from_millis(100));
+
+                // Force the event loop to stay active
+                // SAFETY: All unsafe operations here are necessary for forcing macOS event loop activity:
+                // 1. NSApp() - Required to get NSApplication instance (Objective-C runtime call)
+                // 2. msg_send! - Required for Objective-C method dispatch to updateWindows
+                // 3. CFRunLoop* - Required C FFI calls to wake up the main run loop
+                unsafe {
+                    use cocoa::appkit::NSApp;
+                    use cocoa::base::{id, nil};
+                    use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
+                    use objc::{msg_send, sel, sel_impl};
+
+                    // Get NSApplication shared instance
+                    let app: id = NSApp();
+
+                    if app != nil {
+                        // Force app to process events by calling updateWindows
+                        let _: () = msg_send![app, updateWindows];
+                    }
+
+                    // Wake up the main run loop
+                    let main_loop = CFRunLoopGetMain();
+                    CFRunLoopWakeUp(main_loop);
+                }
+            }
+        });
+    }
 }
 
 impl AppDelegate for GuiDelegate {
     /// Called when the application finishes launching.
     fn did_finish_launching(&self) {
         // Menu setup is now handled when the first window is created
+        // Set up background polling to ensure updates continue when window is not focused
+        self.start_background_polling();
     }
 
-    /// Called periodically; handles window creation and content updates.
+    /// Called when forced by background thread - handles all updates
     fn did_update(&self) {
+        // Debug: Print when did_update is called
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
+        let count = UPDATE_COUNT.fetch_add(1, Ordering::SeqCst);
+        if count % 20 == 0 {
+            println!("[FORCED] did_update called {count} times (forced by background thread)");
+        }
+
         // Handle menu messages
         if let Some(menu_receiver) = self.menu_receiver.borrow().as_ref() {
-            if let Ok(menu_message) = menu_receiver.try_recv() {
+            while let Ok(menu_message) = menu_receiver.try_recv() {
                 match menu_message {
                     MenuMessage::ToggleMode => {
                         self.toggle_mode();
@@ -88,55 +152,38 @@ impl AppDelegate for GuiDelegate {
             }
         }
 
-        // Check if we have a message receiver (i.e., we're in pipe mode).
-        if let Some(receiver) = &self.receiver {
-            // Check for a message without blocking.
-            if let Ok(document_content) = receiver.try_recv() {
-                // If the window doesn't exist yet, this is the first message.
+        // Check for pending content and update
+        if let Ok(mut pending) = self.pending_content.lock() {
+            if let Some(content) = pending.take() {
+                // Create window if needed
                 if self.window.borrow().is_none() {
                     println!("[INFO] First message received. Creating window...");
-                    self.setup_menu(); // Set up menu when creating first window
-                    let window = create_main_window_with_content(
-                        &self.view,
-                        &document_content,
-                        self.is_pipe_mode,
-                    );
-
-                    // Choose scroll behavior based on mode
-                    let scroll_behavior = if self.is_pipe_mode {
-                        ScrollBehavior::Bottom // Pipe mode: scroll to bottom
-                    } else {
-                        ScrollBehavior::Top // File mode: stay at top
-                    };
-
-                    self.view
-                        .update_content_with_scroll(&document_content, scroll_behavior);
-                    // Store the window to prevent creating it again.
+                    self.setup_menu();
+                    let window =
+                        create_main_window_with_content(&self.view, &content, self.is_pipe_mode);
                     *self.window.borrow_mut() = Some(window);
-                } else {
-                    // Window already exists, just update its content.
-
-                    // Choose scroll behavior based on mode
-                    let scroll_behavior = if self.is_pipe_mode {
-                        ScrollBehavior::Bottom // Pipe mode: scroll to bottom
-                    } else {
-                        ScrollBehavior::Top // File mode: stay at top
-                    };
-
-                    self.view
-                        .update_content_with_scroll(&document_content, scroll_behavior);
                 }
-                // Store the current document content
-                *self.current_document.borrow_mut() = Some(document_content);
+
+                // Update content
+                let scroll_behavior = if self.is_pipe_mode {
+                    ScrollBehavior::Bottom
+                } else {
+                    ScrollBehavior::Top
+                };
+
+                self.view
+                    .update_content_with_scroll(&content, scroll_behavior);
+                *self.current_document.borrow_mut() = Some(content);
+                println!("[FORCED] Content updated via forced did_update!");
             }
-        } else {
-            // This is the non-pipe mode. Create a window on the first tick.
-            if self.window.borrow().is_none() {
-                println!("[INFO] No pipe detected. Creating empty window...");
-                self.setup_menu(); // Set up menu when creating first window
-                let window = create_main_window(&self.view);
-                *self.window.borrow_mut() = Some(window);
-            }
+        }
+
+        // Create empty window if needed
+        if self.window.borrow().is_none() {
+            println!("[INFO] Creating empty window...");
+            self.setup_menu();
+            let window = create_main_window(&self.view);
+            *self.window.borrow_mut() = Some(window);
         }
     }
 
