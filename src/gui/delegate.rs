@@ -14,6 +14,7 @@ use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
 
 use crate::content::DocumentContent;
+use crate::gui::types::{FontFamily, StylePreferences, ThemeMode};
 use crate::gui::view::{MarkdownView, ScrollBehavior};
 use crate::gui::window::{create_main_window, create_main_window_with_content};
 use crate::menu::{self, MenuMessage};
@@ -27,6 +28,7 @@ pub struct GuiDelegate {
     menu_receiver: RefCell<Option<mpsc::Receiver<MenuMessage>>>,
     is_pipe_mode: bool,
     pending_content: Arc<Mutex<Option<DocumentContent>>>,
+    style_preferences: RefCell<StylePreferences>,
 }
 
 impl GuiDelegate {
@@ -59,6 +61,7 @@ impl GuiDelegate {
             menu_receiver: RefCell::new(Some(menu_receiver)),
             is_pipe_mode,
             pending_content,
+            style_preferences: RefCell::new(StylePreferences::default()),
         }
     }
 
@@ -79,6 +82,47 @@ impl GuiDelegate {
         let mut current_document_option = self.current_document.borrow_mut();
         if let Some(current_document) = current_document_option.as_mut() {
             current_document.toggle_mode();
+            self.view.update_content(current_document);
+        }
+    }
+
+    /// Handles font family change
+    pub fn set_font_family(&self, font_family: FontFamily) {
+        self.style_preferences.borrow_mut().font_family = font_family;
+        self.update_content_with_new_styles();
+    }
+
+    /// Increases font size
+    pub fn increase_font_size(&self) {
+        self.style_preferences.borrow_mut().increase_font_size();
+        self.update_content_with_new_styles();
+    }
+
+    /// Decreases font size
+    pub fn decrease_font_size(&self) {
+        self.style_preferences.borrow_mut().decrease_font_size();
+        self.update_content_with_new_styles();
+    }
+
+    /// Resets font size to default
+    pub fn reset_font_size(&self) {
+        self.style_preferences.borrow_mut().reset_font_size();
+        self.update_content_with_new_styles();
+    }
+
+    /// Handles theme change
+    pub fn set_theme(&self, theme: ThemeMode) {
+        self.style_preferences.borrow_mut().theme = theme;
+        self.update_content_with_new_styles();
+    }
+
+    /// Updates the content with new styling preferences
+    fn update_content_with_new_styles(&self) {
+        let mut current_document_option = self.current_document.borrow_mut();
+        if let Some(current_document) = current_document_option.as_mut() {
+            current_document.style_preferences = self.style_preferences.borrow().clone();
+            // Regenerate HTML with new theme for syntax highlighting
+            current_document.regenerate_html();
             self.view.update_content(current_document);
         }
     }
@@ -132,12 +176,13 @@ impl AppDelegate for GuiDelegate {
         static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
         let count = UPDATE_COUNT.fetch_add(1, Ordering::SeqCst);
         if count % 20 == 0 {
-            println!("[FORCED] did_update called {count} times (forced by background thread)");
+            println!("[DEBUG] did_update called {count} times");
         }
 
         // Handle menu messages
         if let Some(menu_receiver) = self.menu_receiver.borrow().as_ref() {
             while let Ok(menu_message) = menu_receiver.try_recv() {
+                println!("[DEBUG] Received menu message: {menu_message:?}");
                 match menu_message {
                     MenuMessage::ToggleMode => {
                         self.toggle_mode();
@@ -148,13 +193,31 @@ impl AppDelegate for GuiDelegate {
                     MenuMessage::SelectAll => {
                         self.view.select_all_text();
                     }
+                    MenuMessage::SetFontFamily(font_family) => {
+                        self.set_font_family(font_family);
+                    }
+                    MenuMessage::IncreaseFontSize => {
+                        self.increase_font_size();
+                    }
+                    MenuMessage::DecreaseFontSize => {
+                        self.decrease_font_size();
+                    }
+                    MenuMessage::ResetFontSize => {
+                        self.reset_font_size();
+                    }
+                    MenuMessage::SetTheme(theme) => {
+                        self.set_theme(theme);
+                    }
                 }
             }
         }
 
         // Check for pending content and update
         if let Ok(mut pending) = self.pending_content.lock() {
-            if let Some(content) = pending.take() {
+            if let Some(mut content) = pending.take() {
+                // Apply current style preferences to the content
+                content.style_preferences = self.style_preferences.borrow().clone();
+
                 // Create window if needed
                 if self.window.borrow().is_none() {
                     println!("[INFO] First message received. Creating window...");
@@ -174,7 +237,7 @@ impl AppDelegate for GuiDelegate {
                 self.view
                     .update_content_with_scroll(&content, scroll_behavior);
                 *self.current_document.borrow_mut() = Some(content);
-                println!("[FORCED] Content updated via forced did_update!");
+                println!("[DEBUG] Content updated");
             }
         }
 

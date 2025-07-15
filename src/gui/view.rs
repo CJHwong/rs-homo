@@ -73,50 +73,9 @@ const LINK_INTERCEPTOR_JS: &str = r#"
     });
 "#;
 
-const STYLESHEET: &str = r#"
-:root {
-    color-scheme: light dark;
+fn generate_stylesheet(content: &DocumentContent) -> String {
+    content.style_preferences.generate_css()
 }
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    padding: 20px;
-    margin: 0;
-}
-h1, h2, h3, h4, h5, h6 {
-    border-bottom: 1px solid #d0d7de;
-    padding-bottom: .3em;
-    margin-top: 24px;
-    margin-bottom: 16px;
-}
-code {
-    font-family: "SF Mono", "Menlo", "Monaco", monospace;
-    background-color: rgba(175, 184, 193, 0.2);
-    padding: .2em .4em;
-    margin: 0;
-    font-size: 85%;
-    border-radius: 6px;
-}
-pre {
-    font-family: "SF Mono", "Menlo", "Monaco", monospace;
-    background-color: #f6f8fa;
-    padding: 16px;
-    border-radius: 6px;
-    overflow: auto;
-}
-pre > code {
-    padding: 0;
-    margin: 0;
-    font-size: 100%;
-    background-color: transparent;
-    border: none;
-}
-blockquote {
-    border-left: .25em solid #d0d7de;
-    padding: 0 1em;
-    color: #57606a;
-}
-"#;
 
 #[derive(Default)]
 pub struct LinkOpenerDelegate;
@@ -194,7 +153,10 @@ impl MarkdownView {
 
         let content = match document_content.mode {
             ViewMode::Preview => &document_content.html,
-            ViewMode::Source => &markdown::highlight_markdown(&document_content.markdown),
+            ViewMode::Source => &markdown::highlight_markdown_with_theme(
+                &document_content.markdown,
+                &document_content.style_preferences.theme,
+            ),
         };
 
         let onload_script = match scroll_behavior {
@@ -202,8 +164,9 @@ impl MarkdownView {
             ScrollBehavior::Top => "window.scrollToTop();",
         };
 
+        let stylesheet = generate_stylesheet(document_content);
         let full_html = format!(
-            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>{STYLESHEET}</style></head><body onload=\"{onload_script}\">{content}</body></html>"
+            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>{stylesheet}</style></head><body onload=\"{onload_script}\">{content}</body></html>"
         );
         self.webview.load_html(&full_html);
     }

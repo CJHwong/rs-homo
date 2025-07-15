@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::gui::types::StylePreferences;
+use crate::markdown;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum ViewMode {
     #[default]
@@ -16,6 +19,7 @@ pub struct DocumentContent {
     pub title: String,
     #[allow(dead_code)]
     pub file_path: Option<String>,
+    pub style_preferences: StylePreferences,
 }
 
 impl DocumentContent {
@@ -26,6 +30,7 @@ impl DocumentContent {
             mode: ViewMode::default(),
             title,
             file_path,
+            style_preferences: StylePreferences::default(),
         }
     }
 
@@ -34,5 +39,11 @@ impl DocumentContent {
             ViewMode::Preview => ViewMode::Source,
             ViewMode::Source => ViewMode::Preview,
         };
+    }
+
+    /// Regenerates the HTML content with the current theme
+    pub fn regenerate_html(&mut self) {
+        self.html =
+            markdown::parse_markdown_with_theme(&self.markdown, &self.style_preferences.theme);
     }
 }

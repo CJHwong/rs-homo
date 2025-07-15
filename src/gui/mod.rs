@@ -5,6 +5,7 @@ use cacao::appkit::App; // AppDelegate is not used directly here.
 use std::sync::mpsc;
 
 mod delegate;
+pub mod types;
 mod view;
 mod window;
 

@@ -2,4 +2,4 @@
 
 mod parser;
 
-pub use parser::{highlight_markdown, parse_markdown};
+pub use parser::{highlight_markdown_with_theme, parse_markdown, parse_markdown_with_theme};
