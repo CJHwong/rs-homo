@@ -1,3 +1,9 @@
+#![allow(unexpected_cfgs)]
+
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
+use objc::runtime::Object;
+use objc::{class, msg_send, sel, sel_impl};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -59,6 +65,49 @@ impl Default for StylePreferences {
 }
 
 impl StylePreferences {
+    const PREFERENCES_KEY: &'static str = "StylePreferences";
+
+    /// Load preferences from macOS UserDefaults
+    pub fn load_from_user_defaults() -> Self {
+        unsafe {
+            let user_defaults: *mut Object =
+                msg_send![class!(NSUserDefaults), standardUserDefaults];
+            let key = CFString::new(Self::PREFERENCES_KEY);
+            let key_ptr = key.as_concrete_TypeRef();
+
+            let data: *mut Object = msg_send![user_defaults, dataForKey: key_ptr];
+
+            if !data.is_null() {
+                let length: usize = msg_send![data, length];
+                let bytes: *const u8 = msg_send![data, bytes];
+                let slice = std::slice::from_raw_parts(bytes, length);
+
+                if let Ok(prefs) = serde_json::from_slice::<StylePreferences>(slice) {
+                    return prefs;
+                }
+            }
+        }
+
+        // Return default preferences if loading fails
+        Self::default()
+    }
+
+    /// Save preferences to macOS UserDefaults
+    pub fn save_to_user_defaults(&self) {
+        if let Ok(json_data) = serde_json::to_vec(self) {
+            unsafe {
+                let user_defaults: *mut Object =
+                    msg_send![class!(NSUserDefaults), standardUserDefaults];
+                let key = CFString::new(Self::PREFERENCES_KEY);
+                let key_ptr = key.as_concrete_TypeRef();
+
+                let data: *mut Object = msg_send![class!(NSData), dataWithBytes: json_data.as_ptr() length: json_data.len()];
+                let _: () = msg_send![user_defaults, setObject: data forKey: key_ptr];
+                let _: () = msg_send![user_defaults, synchronize];
+            }
+        }
+    }
+
     pub fn increase_font_size(&mut self) {
         let new_size = match self.font_size as i32 {
             8..=9 => 10.0,

@@ -103,6 +103,32 @@ echo '## Streaming test' | cargo run --
 
 ---
 
+## User Preferences
+
+HOMO stores user preferences (font size, font family, theme) in macOS UserDefaults. These preferences persist across app launches.
+
+### Managing Preferences
+
+View current preferences:
+
+```bash
+defaults read homo StylePreferences
+```
+
+Reset preferences to defaults:
+
+```bash
+defaults delete homo StylePreferences
+```
+
+### Available Preferences
+
+- **Font Family**: System, Menlo, Monaco, Helvetica
+- **Font Size**: Adjustable via menu (⌘+ / ⌘- / ⌘0)
+- **Theme**: Light, Dark, System (follows system preference)
+
+---
+
 ## License
 
 MIT

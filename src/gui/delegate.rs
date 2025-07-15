@@ -61,7 +61,7 @@ impl GuiDelegate {
             menu_receiver: RefCell::new(Some(menu_receiver)),
             is_pipe_mode,
             pending_content,
-            style_preferences: RefCell::new(StylePreferences::default()),
+            style_preferences: RefCell::new(StylePreferences::load_from_user_defaults()),
         }
     }
 
@@ -89,30 +89,35 @@ impl GuiDelegate {
     /// Handles font family change
     pub fn set_font_family(&self, font_family: FontFamily) {
         self.style_preferences.borrow_mut().font_family = font_family;
+        self.style_preferences.borrow().save_to_user_defaults();
         self.update_content_with_new_styles();
     }
 
     /// Increases font size
     pub fn increase_font_size(&self) {
         self.style_preferences.borrow_mut().increase_font_size();
+        self.style_preferences.borrow().save_to_user_defaults();
         self.update_content_with_new_styles();
     }
 
     /// Decreases font size
     pub fn decrease_font_size(&self) {
         self.style_preferences.borrow_mut().decrease_font_size();
+        self.style_preferences.borrow().save_to_user_defaults();
         self.update_content_with_new_styles();
     }
 
     /// Resets font size to default
     pub fn reset_font_size(&self) {
         self.style_preferences.borrow_mut().reset_font_size();
+        self.style_preferences.borrow().save_to_user_defaults();
         self.update_content_with_new_styles();
     }
 
     /// Handles theme change
     pub fn set_theme(&self, theme: ThemeMode) {
         self.style_preferences.borrow_mut().theme = theme;
+        self.style_preferences.borrow().save_to_user_defaults();
         self.update_content_with_new_styles();
     }
 
