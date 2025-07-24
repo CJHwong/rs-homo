@@ -52,27 +52,56 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
-                let syntax = ps
-                    .find_syntax_by_token(&code_block_language)
-                    .unwrap_or_else(|| ps.find_syntax_by_token("txt").unwrap());
 
-                let mut h = HighlightLines::new(syntax, theme);
-                let mut html = String::from("<pre><code>");
-                for line in LinesWithEndings::from(&code_block_text) {
-                    let ranges = h.highlight_line(line, &ps).unwrap();
-                    let mut line_html = String::new();
-                    for (style, text) in ranges {
-                        let fg = style.foreground;
-                        let color = format!("#{:02x}{:02x}{:02x}", fg.r, fg.g, fg.b);
-                        let escaped_text = text.replace('&', "&amp;").replace('<', "&lt;");
-                        line_html.push_str(&format!(
-                            "<span style=\"color:{color}\">{escaped_text}</span>"
-                        ));
+                // Special handling for Mermaid diagrams
+                if code_block_language == "mermaid" {
+                    // Create a div with mermaid class, copy button, and proper escaping
+                    // For Mermaid rendering: use raw content (Mermaid.js handles it)
+                    // For HTML display in <pre><code>: escape HTML entities
+                    let html_escaped_content = code_block_text
+                        .replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;");
+                    // For data attribute: escape HTML attribute value
+                    let attr_escaped_raw = code_block_text
+                        .replace('&', "&amp;")
+                        .replace('"', "&quot;")
+                        .replace('\'', "&#39;");
+                    let html = format!(
+                        "<div class=\"mermaid-container\" data-mermaid-source=\"{attr_escaped_raw}\">\
+                         <div class=\"mermaid-buttons\">\
+                         <button class=\"mermaid-toggle-btn\" onclick=\"toggleMermaidView(this)\" title=\"Toggle rendered/raw view\">👁️</button>\
+                         <button class=\"mermaid-copy-btn\" onclick=\"copyMermaidCode(this)\" title=\"Copy Mermaid source\">📋</button>\
+                         </div>\
+                         <div class=\"mermaid\">{code_block_text}</div>\
+                         <pre class=\"mermaid-raw\" style=\"display: none;\"><code>{html_escaped_content}</code></pre>\
+                         </div>"
+                    );
+                    html_output.push_str(&html);
+                } else {
+                    // Standard syntax highlighting for other code blocks
+                    let syntax = ps
+                        .find_syntax_by_token(&code_block_language)
+                        .unwrap_or_else(|| ps.find_syntax_by_token("txt").unwrap());
+
+                    let mut h = HighlightLines::new(syntax, theme);
+                    let mut html = String::from("<pre><code>");
+                    for line in LinesWithEndings::from(&code_block_text) {
+                        let ranges = h.highlight_line(line, &ps).unwrap();
+                        let mut line_html = String::new();
+                        for (style, text) in ranges {
+                            let fg = style.foreground;
+                            let color = format!("#{:02x}{:02x}{:02x}", fg.r, fg.g, fg.b);
+                            let escaped_text = text.replace('&', "&amp;").replace('<', "&lt;");
+                            line_html.push_str(&format!(
+                                "<span style=\"color:{color}\">{escaped_text}</span>"
+                            ));
+                        }
+                        html.push_str(&line_html);
                     }
-                    html.push_str(&line_html);
+                    html.push_str("</code></pre>");
+                    html_output.push_str(&html);
                 }
-                html.push_str("</code></pre>");
-                html_output.push_str(&html);
 
                 code_block_text.clear();
                 code_block_language.clear();

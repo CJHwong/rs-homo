@@ -70,6 +70,119 @@ const LINK_INTERCEPTOR_JS: &str = r#"
         window.scrollToTop = function() {
             window.scrollTo(0, 0);
         };
+        
+        // Copy function for Mermaid diagrams
+        window.copyMermaidCode = function(button) {
+            const container = button.closest('.mermaid-container');
+            const rawSource = container.getAttribute('data-mermaid-source');
+            // Unescape HTML entities from data attribute
+            const unescapedCode = rawSource
+                .replace(/&amp;/g, '&')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'");
+            window.webkit.messageHandlers.copyText.postMessage(unescapedCode);
+        };
+        
+        // Toggle function for Mermaid rendered/raw view
+        window.toggleMermaidView = function(button) {
+            const container = button.closest('.mermaid-container');
+            const renderedView = container.querySelector('.mermaid');
+            const rawView = container.querySelector('.mermaid-raw');
+            
+            if (renderedView.style.display === 'none') {
+                // Switch to rendered view
+                renderedView.style.display = 'block';
+                rawView.style.display = 'none';
+                button.textContent = '👁️';
+                button.title = 'Toggle rendered/raw view';
+            } else {
+                // Switch to raw view
+                renderedView.style.display = 'none';
+                rawView.style.display = 'block';
+                button.textContent = '📝';
+                button.title = 'Toggle rendered/raw view';
+            }
+        };
+        
+        // Initialize Mermaid when available
+        if (typeof mermaid !== 'undefined') {
+            // Determine theme based on current color scheme
+            const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ||
+                          getComputedStyle(document.body).backgroundColor === 'rgb(13, 17, 23)';
+            
+            mermaid.initialize({
+                startOnLoad: false,  // Change to false to manually control rendering
+                theme: isDark ? 'dark' : 'base',
+                themeVariables: {
+                    primaryColor: '#ff6b35',
+                    primaryTextColor: isDark ? '#f0f6fc' : '#24292f',
+                    primaryBorderColor: isDark ? '#30363d' : '#d1d9e0',
+                    lineColor: isDark ? '#8b949e' : '#57606a',
+                    secondaryColor: isDark ? '#21262d' : '#f6f8fa',
+                    tertiaryColor: isDark ? '#161b22' : '#ffffff'
+                }
+            });
+            
+            // Use setTimeout to ensure DOM is fully loaded
+            setTimeout(() => {
+                // Manually render all mermaid diagrams
+                const mermaidElements = document.querySelectorAll('.mermaid');
+                console.log('Found', mermaidElements.length, 'mermaid elements');
+                
+                mermaidElements.forEach(async (element, index) => {
+                    const graphDefinition = element.textContent.trim();
+                    console.log('Rendering mermaid diagram', index, 'with content length:', graphDefinition.length);
+                    console.log('First 100 chars:', graphDefinition.substring(0, 100));
+                    
+                    try {
+                        // Clear the element first
+                        element.innerHTML = '';
+                        
+                        // Use the modern async API
+                        const { svg } = await mermaid.render(`mermaidChart${index}`, graphDefinition);
+                        element.innerHTML = svg;
+                        console.log('Successfully rendered diagram', index);
+                    } catch (error) {
+                        console.error('Mermaid rendering error for diagram', index, ':', error);
+                        element.innerHTML = '<div style="color: red; padding: 10px; font-family: monospace;">Mermaid rendering error: ' + error.message + '<br/>Content: ' + graphDefinition.substring(0, 100) + '...</div>';
+                    }
+                });
+            }, 100);
+            
+            // Re-render mermaid diagrams when theme changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: e.matches ? 'dark' : 'base',
+                    themeVariables: {
+                        primaryColor: '#ff6b35',
+                        primaryTextColor: e.matches ? '#f0f6fc' : '#24292f',
+                        primaryBorderColor: e.matches ? '#30363d' : '#d1d9e0',
+                        lineColor: e.matches ? '#8b949e' : '#57606a',
+                        secondaryColor: e.matches ? '#21262d' : '#f6f8fa',
+                        tertiaryColor: e.matches ? '#161b22' : '#ffffff'
+                    }
+                });
+                
+                // Re-render all mermaid diagrams
+                const mermaidElements = document.querySelectorAll('.mermaid');
+                mermaidElements.forEach(async (element, index) => {
+                    // Get the original content from the raw version
+                    const container = element.closest('.mermaid-container');
+                    const rawElement = container.querySelector('.mermaid-raw code');
+                    const graphDefinition = rawElement ? rawElement.textContent.trim() : element.textContent.trim();
+                    
+                    try {
+                        element.innerHTML = '';
+                        const { svg } = await mermaid.render(`mermaidChart${index}_${Date.now()}`, graphDefinition);
+                        element.innerHTML = svg;
+                    } catch (error) {
+                        console.error('Mermaid re-rendering error:', error);
+                        element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';
+                    }
+                });
+            });
+        }
     });
 "#;
 
@@ -166,7 +279,17 @@ impl MarkdownView {
 
         let stylesheet = generate_stylesheet(document_content);
         let full_html = format!(
-            "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>{stylesheet}</style></head><body onload=\"{onload_script}\">{content}</body></html>"
+            r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>{stylesheet}</style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body onload="{onload_script}">
+{content}
+</body>
+</html>"#
         );
         self.webview.load_html(&full_html);
     }

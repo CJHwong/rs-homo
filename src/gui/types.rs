@@ -297,6 +297,80 @@ table td {{
 table tbody tr:hover {{
     background-color: var(--table-row-hover-bg);
 }}
+/* Mermaid diagram styling */
+.mermaid-container {{
+    position: relative;
+    margin: 16px 0;
+}}
+.mermaid-buttons {{
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+    display: flex;
+    gap: 4px;
+}}
+.mermaid-toggle-btn,
+.mermaid-copy-btn {{
+    background: var(--table-header-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}}
+.mermaid-toggle-btn:hover,
+.mermaid-copy-btn:hover {{
+    opacity: 1;
+    background: var(--table-row-hover-bg);
+}}
+.mermaid-raw {{
+    font-family: "SF Mono", "Menlo", "Monaco", monospace;
+    background-color: var(--pre-bg-color);
+    padding: 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    overflow: auto;
+    margin: 0;
+}}
+.mermaid-raw code {{
+    background: transparent;
+    padding: 0;
+    border: none;
+    font-size: 14px;
+}}
+.mermaid {{
+    text-align: center;
+    padding: 16px;
+    background-color: var(--pre-bg-color);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    overflow: auto;
+}}
+.mermaid svg {{
+    max-width: 100%;
+    height: auto;
+}}
+/* Ensure mermaid diagrams are visible in both themes */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon {{
+    stroke: var(--border-color);
+    stroke-width: 1px;
+}}
+.mermaid .edgePath path {{
+    stroke: var(--muted-text-color);
+    stroke-width: 1.5px;
+}}
+.mermaid .edgeLabel {{
+    background-color: var(--table-row-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 2px 4px;
+}}
 "#
         ));
 
