@@ -284,7 +284,7 @@ impl MarkdownView {
 <head>
     <meta charset="UTF-8">
     <style>{stylesheet}</style>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.9.0/dist/mermaid.min.js"></script>
 </head>
 <body onload="{onload_script}">
 {content}
