@@ -70,8 +70,8 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
                     let html = format!(
                         "<div class=\"mermaid-container\" data-mermaid-source=\"{attr_escaped_raw}\">\
                          <div class=\"mermaid-buttons\">\
-                         <button class=\"mermaid-toggle-btn\" onclick=\"toggleMermaidView(this)\" title=\"Toggle rendered/raw view\">👁️</button>\
-                         <button class=\"mermaid-copy-btn\" onclick=\"copyMermaidCode(this)\" title=\"Copy Mermaid source\">📋</button>\
+                         <button class=\"mermaid-toggle-btn\" onclick=\"toggleMermaidView(this)\" title=\"Toggle rendered/raw view\">View</button>\
+                         <button class=\"mermaid-copy-btn\" onclick=\"copyMermaidCode(this)\" title=\"Copy Mermaid source\">Copy</button>\
                          </div>\
                          <div class=\"mermaid\">{code_block_text}</div>\
                          <pre class=\"mermaid-raw\" style=\"display: none;\"><code>{html_escaped_content}</code></pre>\

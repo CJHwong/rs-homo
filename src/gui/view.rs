@@ -93,13 +93,13 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 // Switch to rendered view
                 renderedView.style.display = 'block';
                 rawView.style.display = 'none';
-                button.textContent = '👁️';
+                button.textContent = 'View';
                 button.title = 'Toggle rendered/raw view';
             } else {
                 // Switch to raw view
                 renderedView.style.display = 'none';
                 rawView.style.display = 'block';
-                button.textContent = '📝';
+                button.textContent = 'Raw';
                 button.title = 'Toggle rendered/raw view';
             }
         };
