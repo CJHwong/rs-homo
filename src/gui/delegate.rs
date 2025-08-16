@@ -13,7 +13,7 @@ use std::time::Duration;
 use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
 
-use crate::content::DocumentContent;
+use crate::content::{ContentUpdate, DocumentContent};
 use crate::gui::types::{FontFamily, StylePreferences, ThemeMode};
 use crate::gui::view::{MarkdownView, ScrollBehavior};
 use crate::gui::window::{create_main_window, create_main_window_with_content};
@@ -27,13 +27,13 @@ pub struct GuiDelegate {
     current_document: RefCell<Option<DocumentContent>>,
     menu_receiver: RefCell<Option<mpsc::Receiver<MenuMessage>>>,
     is_pipe_mode: bool,
-    pending_content: Arc<Mutex<Option<DocumentContent>>>,
+    pending_content: Arc<Mutex<Option<ContentUpdate>>>,
     style_preferences: RefCell<StylePreferences>,
 }
 
 impl GuiDelegate {
-    /// Creates a new GUI delegate with an optional receiver for streamed DocumentContent.
-    pub fn new(receiver: Option<mpsc::Receiver<DocumentContent>>, is_pipe_mode: bool) -> Self {
+    /// Creates a new GUI delegate with an optional receiver for streamed ContentUpdate.
+    pub fn new(receiver: Option<mpsc::Receiver<ContentUpdate>>, is_pipe_mode: bool) -> Self {
         // Set up menu message channel
         let (menu_sender, menu_receiver) = mpsc::channel();
         menu::set_menu_sender(menu_sender);
@@ -45,9 +45,9 @@ impl GuiDelegate {
         if let Some(orig_receiver) = receiver {
             let pending_content_clone = pending_content.clone();
             thread::spawn(move || {
-                while let Ok(content) = orig_receiver.recv() {
+                while let Ok(content_update) = orig_receiver.recv() {
                     if let Ok(mut pending) = pending_content_clone.lock() {
-                        *pending = Some(content);
+                        *pending = Some(content_update);
                     }
                 }
             });
@@ -79,11 +79,8 @@ impl GuiDelegate {
 
     /// Handles the toggle mode action
     pub fn toggle_mode(&self) {
-        let mut current_document_option = self.current_document.borrow_mut();
-        if let Some(current_document) = current_document_option.as_mut() {
-            current_document.toggle_mode();
-            self.view.update_content(current_document);
-        }
+        let style_preferences = self.style_preferences.borrow().clone();
+        self.view.toggle_mode(&style_preferences);
     }
 
     /// Handles font family change
@@ -218,31 +215,47 @@ impl AppDelegate for GuiDelegate {
         }
 
         // Check for pending content and update
-        if let Ok(mut pending) = self.pending_content.lock() {
-            if let Some(mut content) = pending.take() {
-                // Apply current style preferences to the content
-                content.style_preferences = self.style_preferences.borrow().clone();
+        if let Ok(mut pending) = self.pending_content.lock()
+            && let Some(content_update) = pending.take()
+        {
+            match content_update {
+                ContentUpdate::FullReplace(mut content) => {
+                    // Apply current style preferences to the content
+                    content.style_preferences = self.style_preferences.borrow().clone();
 
-                // Create window if needed
-                if self.window.borrow().is_none() {
-                    println!("[INFO] First message received. Creating window...");
-                    self.setup_menu();
-                    let window =
-                        create_main_window_with_content(&self.view, &content, self.is_pipe_mode);
-                    *self.window.borrow_mut() = Some(window);
+                    // Create window if needed
+                    if self.window.borrow().is_none() {
+                        println!("[INFO] First message received. Creating window...");
+                        self.setup_menu();
+                        let window = create_main_window_with_content(
+                            &self.view,
+                            &content,
+                            self.is_pipe_mode,
+                        );
+                        *self.window.borrow_mut() = Some(window);
+                    }
+
+                    // Update content
+                    let scroll_behavior = if self.is_pipe_mode {
+                        ScrollBehavior::Bottom
+                    } else {
+                        ScrollBehavior::Top
+                    };
+
+                    self.view
+                        .update_content_with_scroll(&content, scroll_behavior);
+                    *self.current_document.borrow_mut() = Some(content);
+                    println!("[DEBUG] Content updated (full replace)");
                 }
-
-                // Update content
-                let scroll_behavior = if self.is_pipe_mode {
-                    ScrollBehavior::Bottom
-                } else {
-                    ScrollBehavior::Top
-                };
-
-                self.view
-                    .update_content_with_scroll(&content, scroll_behavior);
-                *self.current_document.borrow_mut() = Some(content);
-                println!("[DEBUG] Content updated");
+                ContentUpdate::Append { markdown, html } => {
+                    // Only append if we have a window
+                    if self.window.borrow().is_some() {
+                        let style_preferences = self.style_preferences.borrow().clone();
+                        self.view
+                            .append_content(&markdown, &html, &style_preferences);
+                        println!("[DEBUG] Content appended");
+                    }
+                }
             }
         }
 

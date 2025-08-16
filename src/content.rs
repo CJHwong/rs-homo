@@ -3,11 +3,17 @@ use serde::{Deserialize, Serialize};
 use crate::gui::types::StylePreferences;
 use crate::markdown;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum ViewMode {
     #[default]
     Preview,
     Source,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContentUpdate {
+    FullReplace(DocumentContent),
+    Append { markdown: String, html: String }, // Both markdown and HTML chunks to append
 }
 
 #[derive(Debug, Clone)]
@@ -32,13 +38,6 @@ impl DocumentContent {
             file_path,
             style_preferences: StylePreferences::default(),
         }
-    }
-
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            ViewMode::Preview => ViewMode::Source,
-            ViewMode::Source => ViewMode::Preview,
-        };
     }
 
     /// Regenerates the HTML content with the current theme

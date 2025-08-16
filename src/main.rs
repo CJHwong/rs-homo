@@ -1,7 +1,7 @@
 //! Entry point for the Markdown Viewer application.
 //! Handles both GUI and streaming (pipe) modes.
 
-use content::DocumentContent;
+use content::ContentUpdate;
 use std::env;
 use std::sync::mpsc;
 use std::thread;
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() > 1 {
         let filename = &args[1];
         println!("File argument detected: {filename}. Setting up file mode.");
-        let (sender, receiver) = mpsc::channel::<DocumentContent>();
+        let (sender, receiver) = mpsc::channel::<ContentUpdate>();
         let filename = filename.clone();
         thread::spawn(move || {
             if let Err(e) = streaming::read_from_file(sender, &filename) {
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     } else {
         println!("Pipe detected. Setting up streaming mode.");
-        let (sender, receiver) = mpsc::channel::<DocumentContent>();
+        let (sender, receiver) = mpsc::channel::<ContentUpdate>();
         thread::spawn(move || {
             if let Err(e) = streaming::read_from_pipe(sender) {
                 eprintln!("[ERROR] Streaming thread failed: {e}");

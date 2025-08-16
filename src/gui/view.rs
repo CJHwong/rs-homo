@@ -71,6 +71,49 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             window.scrollTo(0, 0);
         };
         
+        // Content appending function
+        window.appendContent = function(htmlContent) {
+            // Check if user was near the bottom before adding content
+            const wasNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
+            
+            const div = document.createElement('div');
+            div.innerHTML = htmlContent;
+            document.body.appendChild(div);
+            
+            // Only scroll to bottom if user was already near the bottom
+            if (wasNearBottom) {
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
+            // If user wasn't near bottom, preserve their scroll position (do nothing)
+            
+            // Re-initialize Mermaid for any new diagrams
+            if (typeof mermaid !== 'undefined') {
+                const newMermaidElements = div.querySelectorAll('.mermaid');
+                newMermaidElements.forEach(async (element, index) => {
+                    const graphDefinition = element.textContent.trim();
+                    try {
+                        element.innerHTML = '';
+                        const { svg } = await mermaid.render(`appendedChart${Date.now()}_${index}`, graphDefinition);
+                        element.innerHTML = svg;
+                    } catch (error) {
+                        console.error('Mermaid rendering error for appended content:', error);
+                        element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';
+                    }
+                });
+            }
+        };
+        
+        // Listen for append messages from the Rust side
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set up a global handler for append operations
+            window.handleAppendMessage = function(htmlContent) {
+                window.appendContent(htmlContent);
+            };
+        });
+        
         // Copy function for Mermaid diagrams
         window.copyMermaidCode = function(button) {
             const container = button.closest('.mermaid-container');
@@ -233,13 +276,37 @@ impl WebViewDelegate for LinkOpenerDelegate {
 pub struct MarkdownView {
     pub webview: WebView<LinkOpenerDelegate>,
     current_mode: std::cell::RefCell<ViewMode>,
+    accumulated_content: std::cell::RefCell<String>, // HTML content
+    accumulated_markdown: std::cell::RefCell<String>, // Original markdown content
 }
 
 impl MarkdownView {
+    /// Execute JavaScript in the WebView using native objc calls
+    /// NOTE: Direct DOM appending (no reload) is crucial for streaming UX -
+    /// reloading the entire page would interrupt user scrolling and selection
+    #[allow(deprecated)]
+    #[allow(unexpected_cfgs)]
+    pub fn evaluate_javascript(&self, script: &str) {
+        self.webview.objc.with_mut(|obj| unsafe {
+            use cocoa::base::nil;
+            use cocoa::foundation::NSString;
+            use objc::{msg_send, sel, sel_impl};
+
+            // Convert the script to NSString
+            let ns_script = NSString::alloc(nil).init_str(script);
+
+            // Call evaluateJavaScript:completionHandler: on the WKWebView
+            let _: () = msg_send![obj, evaluateJavaScript:ns_script completionHandler:nil];
+
+            println!("[DEBUG] Executed JavaScript: {script}");
+        });
+    }
+
     pub fn new() -> Self {
         let mut config = WebViewConfig::default();
         config.add_handler("linkClicked");
         config.add_handler("copyText");
+        config.add_handler("appendHTML");
 
         // CORRECTED: Use the correct enum variant `InjectAt::Start`.
         config.add_user_script(LINK_INTERCEPTOR_JS, InjectAt::Start, false);
@@ -250,6 +317,8 @@ impl MarkdownView {
         MarkdownView {
             webview,
             current_mode: std::cell::RefCell::new(ViewMode::Preview),
+            accumulated_content: std::cell::RefCell::new(String::new()),
+            accumulated_markdown: std::cell::RefCell::new(String::new()),
         }
     }
 
@@ -257,11 +326,42 @@ impl MarkdownView {
         self.update_content_with_scroll(document_content, ScrollBehavior::Top);
     }
 
+    pub fn append_content(
+        &self,
+        markdown_chunk: &str,
+        html_chunk: &str,
+        _style_preferences: &crate::gui::types::StylePreferences,
+    ) {
+        // Accumulate both markdown and HTML content
+        self.accumulated_content.borrow_mut().push_str(html_chunk);
+        self.accumulated_markdown
+            .borrow_mut()
+            .push_str(markdown_chunk);
+
+        // Only append to DOM if we're in preview mode
+        if *self.current_mode.borrow() == ViewMode::Preview {
+            // Use true DOM appending via JavaScript execution
+            let escaped_html = html_chunk
+                .replace('\\', "\\\\")
+                .replace('`', "\\`")
+                .replace('\'', "\\'")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r");
+
+            let append_script = format!("window.appendContent(`{escaped_html}`);");
+            self.evaluate_javascript(&append_script);
+        }
+        // If we're in source mode, we'll regenerate the full content when toggling
+    }
+
     pub fn update_content_with_scroll(
         &self,
         document_content: &DocumentContent,
         scroll_behavior: ScrollBehavior,
     ) {
+        // Set accumulated content to match the new content (for streaming mode)
+        *self.accumulated_content.borrow_mut() = document_content.html.clone();
+        *self.accumulated_markdown.borrow_mut() = document_content.markdown.clone();
         *self.current_mode.borrow_mut() = document_content.mode.clone();
 
         let content = match document_content.mode {
@@ -306,5 +406,47 @@ impl MarkdownView {
         // This could be enhanced to directly trigger select all via JavaScript evaluation
         // if that API becomes available in future versions of cacao
         println!("[INFO] Select All triggered via menu - use Cmd+A to select all text");
+    }
+
+    pub fn toggle_mode(&self, style_preferences: &crate::gui::types::StylePreferences) {
+        // Toggle the current mode
+        let new_mode = match *self.current_mode.borrow() {
+            ViewMode::Preview => ViewMode::Source,
+            ViewMode::Source => ViewMode::Preview,
+        };
+        *self.current_mode.borrow_mut() = new_mode.clone();
+
+        // Regenerate content based on new mode using accumulated data
+        let content = match new_mode {
+            ViewMode::Preview => {
+                // Use accumulated HTML content
+                self.accumulated_content.borrow().clone()
+            }
+            ViewMode::Source => {
+                // Generate highlighted markdown from accumulated markdown
+                markdown::highlight_markdown_with_theme(
+                    &self.accumulated_markdown.borrow(),
+                    &style_preferences.theme,
+                )
+            }
+        };
+
+        // Do a full reload for mode toggle (this is acceptable since it's user-initiated)
+        let stylesheet = style_preferences.generate_css();
+        let onload_script = "window.scrollToTop();";
+        let full_html = format!(
+            r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>{stylesheet}</style>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body onload="{onload_script}">
+{content}
+</body>
+</html>"#
+        );
+        self.webview.load_html(&full_html);
     }
 }
