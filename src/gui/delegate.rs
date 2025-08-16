@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
+use log::{debug, info};
 
 use crate::content::{ContentUpdate, DocumentContent};
 use crate::gui::types::{FontFamily, StylePreferences, ThemeMode};
@@ -173,18 +174,10 @@ impl AppDelegate for GuiDelegate {
 
     /// Called when forced by background thread - handles all updates
     fn did_update(&self) {
-        // Debug: Print when did_update is called
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static UPDATE_COUNT: AtomicU32 = AtomicU32::new(0);
-        let count = UPDATE_COUNT.fetch_add(1, Ordering::SeqCst);
-        if count % 20 == 0 {
-            println!("[DEBUG] did_update called {count} times");
-        }
-
         // Handle menu messages
         if let Some(menu_receiver) = self.menu_receiver.borrow().as_ref() {
             while let Ok(menu_message) = menu_receiver.try_recv() {
-                println!("[DEBUG] Received menu message: {menu_message:?}");
+                debug!("Received menu message: {menu_message:?}");
                 match menu_message {
                     MenuMessage::ToggleMode => {
                         self.toggle_mode();
@@ -225,7 +218,7 @@ impl AppDelegate for GuiDelegate {
 
                     // Create window if needed
                     if self.window.borrow().is_none() {
-                        println!("[INFO] First message received. Creating window...");
+                        info!("First message received. Creating window...");
                         self.setup_menu();
                         let window = create_main_window_with_content(
                             &self.view,
@@ -245,7 +238,7 @@ impl AppDelegate for GuiDelegate {
                     self.view
                         .update_content_with_scroll(&content, scroll_behavior);
                     *self.current_document.borrow_mut() = Some(content);
-                    println!("[DEBUG] Content updated (full replace)");
+                    debug!("Content updated (full replace)");
                 }
                 ContentUpdate::Append { markdown, html } => {
                     // Only append if we have a window
@@ -253,7 +246,7 @@ impl AppDelegate for GuiDelegate {
                         let style_preferences = self.style_preferences.borrow().clone();
                         self.view
                             .append_content(&markdown, &html, &style_preferences);
-                        println!("[DEBUG] Content appended");
+                        debug!("Content appended");
                     }
                 }
             }
@@ -261,7 +254,7 @@ impl AppDelegate for GuiDelegate {
 
         // Create empty window if needed
         if self.window.borrow().is_none() {
-            println!("[INFO] Creating empty window...");
+            info!("Creating empty window...");
             self.setup_menu();
             let window = create_main_window(&self.view);
             *self.window.borrow_mut() = Some(window);

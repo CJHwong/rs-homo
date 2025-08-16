@@ -1,4 +1,5 @@
 use cacao::appkit::menu::{Menu, MenuItem};
+use log::{debug, error};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc;
@@ -25,9 +26,9 @@ static MENU_SENDER: LazyLock<Arc<Mutex<Option<mpsc::Sender<MenuMessage>>>>> =
 pub fn set_menu_sender(sender: mpsc::Sender<MenuMessage>) {
     if let Ok(mut sender_guard) = MENU_SENDER.lock() {
         *sender_guard = Some(sender);
-        println!("[DEBUG] Menu sender set successfully");
+        debug!("Menu sender set successfully");
     } else {
-        println!("[ERROR] Failed to lock MENU_SENDER for setting");
+        error!("Failed to lock MENU_SENDER for setting");
     }
 }
 
@@ -35,17 +36,17 @@ pub fn dispatch_menu_message(message: MenuMessage) {
     match MENU_SENDER.lock() {
         Ok(sender_guard) => {
             if let Some(ref sender) = *sender_guard {
-                println!("[DEBUG] Dispatching menu message: {message:?}");
+                debug!("Dispatching menu message: {message:?}");
                 match sender.send(message) {
-                    Ok(_) => println!("[DEBUG] Message sent successfully"),
-                    Err(e) => println!("[ERROR] Failed to send message: {e:?}"),
+                    Ok(_) => debug!("Message sent successfully"),
+                    Err(e) => error!("Failed to send message: {e:?}"),
                 }
             } else {
-                println!("[ERROR] MENU_SENDER is None!");
+                error!("MENU_SENDER is None!");
             }
         }
         Err(e) => {
-            println!("[ERROR] Failed to lock MENU_SENDER: {e:?}");
+            error!("Failed to lock MENU_SENDER: {e:?}");
         }
     }
 }

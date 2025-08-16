@@ -3,6 +3,7 @@
 use crate::content::{ContentUpdate, DocumentContent};
 use crate::error::AppError;
 use crate::markdown;
+use log::{debug, error, info};
 use std::fs::File;
 use std::io::{self, Read};
 use std::sync::mpsc;
@@ -91,41 +92,74 @@ fn find_last_safe_boundary(content: &str, start_pos: usize) -> Option<usize> {
 
 /// Reads from stdin in chunks, parses accumulated markdown, and sends ContentUpdate to the GUI.
 pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppError> {
+    debug!("Starting to read from stdin");
     let mut stdin = io::stdin();
     let mut buffer = String::new();
     let mut processed_length = 0;
     let mut is_first_chunk = true;
+    let mut chunk_count = 0;
 
     loop {
+        chunk_count += 1;
+        debug!("Reading chunk #{chunk_count}");
         let mut chunk_buf = vec![0; CHUNK_SIZE];
-        let bytes_read = stdin.read(&mut chunk_buf)?;
+
+        debug!("About to read from stdin...");
+        let bytes_read = match stdin.read(&mut chunk_buf) {
+            Ok(bytes) => {
+                debug!("Successfully read {bytes} bytes");
+                bytes
+            }
+            Err(e) => {
+                error!("Failed to read from stdin: {e}");
+                return Err(AppError::from(e));
+            }
+        };
 
         if bytes_read == 0 {
+            debug!("Reached end of input (pipe closed)");
             // Pipe closed - send any remaining content
             if processed_length < buffer.len() {
                 let remaining_content = &buffer[processed_length..];
+                let remaining_len = remaining_content.len();
+                debug!("Sending {remaining_len} remaining bytes");
                 if !remaining_content.is_empty() {
                     let html_chunk = markdown::parse_markdown_chunk(
                         remaining_content,
                         &crate::gui::types::ThemeMode::System,
                     );
-                    let _ = sender.send(ContentUpdate::Append {
+                    match sender.send(ContentUpdate::Append {
                         markdown: remaining_content.to_string(),
                         html: html_chunk,
-                    });
+                    }) {
+                        Ok(()) => debug!("Successfully sent remaining content"),
+                        Err(e) => error!("Failed to send remaining content: {e}"),
+                    }
                 }
+            } else {
+                debug!("No remaining content to send");
             }
+            debug!("Exiting read loop");
             break;
         }
 
         chunk_buf.truncate(bytes_read);
         let text_chunk = String::from_utf8_lossy(&chunk_buf);
+        debug!(
+            "Processing text chunk: {:?}",
+            &text_chunk[..text_chunk.len().min(50)]
+        );
         buffer.push_str(&text_chunk);
+        let buffer_len = buffer.len();
+        debug!("Total buffer length: {buffer_len}");
 
         if is_first_chunk {
+            debug!("Processing first chunk");
             // For first chunk, be more lenient - send content if we have a reasonable amount
             if buffer.len() > 10 {
+                debug!("Buffer length > 10, looking for safe boundary");
                 if let Some(boundary_pos) = find_last_safe_boundary(&buffer, 0) {
+                    debug!("Found safe boundary at position {boundary_pos}");
                     let safe_content = &buffer[..boundary_pos];
                     let html_content = markdown::parse_markdown(safe_content);
                     let document_content = DocumentContent::new(
@@ -135,18 +169,20 @@ pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppErro
                         None,
                     );
 
-                    if sender
-                        .send(ContentUpdate::FullReplace(document_content))
-                        .is_err()
-                    {
-                        println!(
-                            "[INFO] GUI receiver disconnected. Shutting down streaming thread."
-                        );
-                        break;
+                    match sender.send(ContentUpdate::FullReplace(document_content)) {
+                        Ok(()) => {
+                            debug!("Successfully sent first content update");
+                            processed_length = boundary_pos;
+                            is_first_chunk = false;
+                        }
+                        Err(e) => {
+                            error!("Failed to send first content: {e}");
+                            info!("GUI receiver disconnected. Shutting down streaming thread.");
+                            break;
+                        }
                     }
-                    processed_length = boundary_pos;
-                    is_first_chunk = false;
                 } else if buffer.len() > 100 {
+                    debug!("No safe boundary found but buffer > 100, sending all content");
                     // If no safe boundary found but we have substantial content, send it anyway
                     let html_content = markdown::parse_markdown(&buffer);
                     let document_content = DocumentContent::new(
@@ -156,43 +192,59 @@ pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppErro
                         None,
                     );
 
-                    if sender
-                        .send(ContentUpdate::FullReplace(document_content))
-                        .is_err()
-                    {
-                        println!(
-                            "[INFO] GUI receiver disconnected. Shutting down streaming thread."
-                        );
-                        break;
+                    match sender.send(ContentUpdate::FullReplace(document_content)) {
+                        Ok(()) => {
+                            debug!("Successfully sent substantial first content");
+                            processed_length = buffer.len();
+                            is_first_chunk = false;
+                        }
+                        Err(e) => {
+                            error!("Failed to send substantial content: {e}");
+                            info!("GUI receiver disconnected. Shutting down streaming thread.");
+                            break;
+                        }
                     }
-                    processed_length = buffer.len();
-                    is_first_chunk = false;
+                } else {
+                    let buffer_len = buffer.len();
+                    debug!("Buffer length {buffer_len} not sufficient for first update");
                 }
+            } else {
+                let buffer_len = buffer.len();
+                debug!("Buffer length {buffer_len} too small for first update");
             }
         } else {
+            debug!("Processing subsequent chunk");
             // For subsequent chunks, look for safe boundaries to send incremental updates
             if let Some(boundary_pos) = find_last_safe_boundary(&buffer, processed_length) {
+                debug!("Found boundary at position {boundary_pos} (processed: {processed_length})");
                 let new_content = &buffer[processed_length..boundary_pos];
                 if !new_content.is_empty() {
+                    let new_content_len = new_content.len();
+                    debug!("Sending {new_content_len} bytes of new content");
                     let html_chunk = markdown::parse_markdown_chunk(
                         new_content,
                         &crate::gui::types::ThemeMode::System,
                     );
 
-                    if sender
-                        .send(ContentUpdate::Append {
-                            markdown: new_content.to_string(),
-                            html: html_chunk,
-                        })
-                        .is_err()
-                    {
-                        println!(
-                            "[INFO] GUI receiver disconnected. Shutting down streaming thread."
-                        );
-                        break;
+                    match sender.send(ContentUpdate::Append {
+                        markdown: new_content.to_string(),
+                        html: html_chunk,
+                    }) {
+                        Ok(()) => {
+                            debug!("Successfully sent append update");
+                            processed_length = boundary_pos;
+                        }
+                        Err(e) => {
+                            error!("Failed to send append update: {e}");
+                            info!("GUI receiver disconnected. Shutting down streaming thread.");
+                            break;
+                        }
                     }
-                    processed_length = boundary_pos;
+                } else {
+                    debug!("No new content to send (empty between boundaries)");
                 }
+            } else {
+                debug!("No safe boundary found for subsequent content");
             }
         }
     }
@@ -202,21 +254,31 @@ pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppErro
 
 /// Reads the entire file, parses markdown, and sends ContentUpdate to the GUI.
 pub fn read_from_file(sender: mpsc::Sender<ContentUpdate>, filename: &str) -> Result<(), AppError> {
+    debug!("Opening file: {filename}");
     let mut file = File::open(filename)?;
     let mut buffer = String::new();
-    file.read_to_string(&mut buffer)?;
 
+    debug!("Reading file content");
+    file.read_to_string(&mut buffer)?;
+    let buffer_len = buffer.len();
+    debug!("Read {buffer_len} bytes from file");
+
+    debug!("Parsing markdown");
     let html_content = markdown::parse_markdown(&buffer);
     let title = std::path::Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Untitled")
         .to_string();
+    debug!("File title: {title}");
 
     let document_content =
         DocumentContent::new(buffer, html_content, title, Some(filename.to_string()));
 
-    // If the receiver is disconnected, exit gracefully.
-    let _ = sender.send(ContentUpdate::FullReplace(document_content));
+    debug!("Sending content update to GUI");
+    match sender.send(ContentUpdate::FullReplace(document_content)) {
+        Ok(()) => debug!("Successfully sent file content to GUI"),
+        Err(e) => error!("Failed to send content to GUI: {e}"),
+    }
     Ok(())
 }

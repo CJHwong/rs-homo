@@ -2,6 +2,7 @@ use crate::content::{DocumentContent, ViewMode};
 use crate::markdown;
 use cacao::pasteboard::Pasteboard;
 use cacao::webview::{InjectAt, WebView, WebViewConfig, WebViewDelegate};
+use log::{debug, info};
 
 #[derive(Clone, Copy)]
 pub enum ScrollBehavior {
@@ -373,24 +374,17 @@ pub struct LinkOpenerDelegate;
 
 impl WebViewDelegate for LinkOpenerDelegate {
     fn on_message(&self, name: &str, body: &str) {
-        println!(
-            "[DEBUG] Received message: name='{}', body_len={}",
-            name,
-            body.len()
-        );
+        debug!("Received message: name='{}', body_len={}", name, body.len());
         match name {
             "linkClicked" => {
                 let url = body;
-                println!("[INFO] Opening external link: {url}");
+                info!("Opening external link: {url}");
                 open::that(url).ok();
             }
             "copyText" => {
                 let text = body;
-                println!(
-                    "[INFO] Copying text to clipboard: {} characters",
-                    text.len()
-                );
-                println!("[DEBUG] Text content: '{text}'");
+                info!("Copying text to clipboard: {} characters", text.len());
+                debug!("Text content: '{text}'");
 
                 // Copy to clipboard - try manual implementation
                 let pasteboard = Pasteboard::default();
@@ -399,10 +393,10 @@ impl WebViewDelegate for LinkOpenerDelegate {
                 // Try both the convenience method and manual approach
                 pasteboard.copy_text(text);
 
-                println!("[INFO] Successfully copied to clipboard");
+                info!("Successfully copied to clipboard");
             }
             _ => {
-                println!("[DEBUG] Unknown message type: {name}");
+                debug!("Unknown message type: {name}");
             }
         }
     }
@@ -433,7 +427,7 @@ impl MarkdownView {
             // Call evaluateJavaScript:completionHandler: on the WKWebView
             let _: () = msg_send![obj, evaluateJavaScript:ns_script completionHandler:nil];
 
-            println!("[DEBUG] Executed JavaScript: {script}");
+            debug!("Executed JavaScript: {script}");
         });
     }
 
@@ -551,14 +545,14 @@ setTimeout(function() {{
         // For now, we rely on the JavaScript keyboard handler
         // This could be enhanced to directly trigger copy via JavaScript evaluation
         // if that API becomes available in future versions of cacao
-        println!("[INFO] Copy triggered via menu - use Cmd+C to copy selected text");
+        info!("Copy triggered via menu - use Cmd+C to copy selected text");
     }
 
     pub fn select_all_text(&self) {
         // For now, we rely on the JavaScript keyboard handler
         // This could be enhanced to directly trigger select all via JavaScript evaluation
         // if that API becomes available in future versions of cacao
-        println!("[INFO] Select All triggered via menu - use Cmd+A to select all text");
+        info!("Select All triggered via menu - use Cmd+A to select all text");
     }
 
     pub fn toggle_mode(&self, style_preferences: &crate::gui::types::StylePreferences) {
