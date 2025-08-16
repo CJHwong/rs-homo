@@ -14,7 +14,9 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 - **Live streaming**: Pipe Markdown to stdin and see live updates
 - **Open files directly**: Pass a markdown file as an argument to view it instantly
 - **GitHub-flavored Markdown**: Tables, footnotes, strikethrough, task lists
+- **Mermaid diagram support**: Interactive flowcharts, sequence diagrams, and more
 - **External link handling**: Opens links in your browser
+- **Customizable appearance**: Font family, size, and theme preferences
 
 ---
 
@@ -83,11 +85,16 @@ homo README.md
 
 ### Project Structure
 
-- `src/main.rs` — Entry point, handles GUI/streaming mode
-- `src/gui/` — GUI logic (window, view, delegate)
-- `src/markdown/` — Markdown parsing utilities
-- `src/streaming.rs` — Streaming logic for stdin → GUI
-- `src/error.rs` — Unified error type
+- `src/main.rs` — Entry point, handles GUI/streaming mode detection
+- `src/gui/` — Complete GUI implementation using AppKit bindings
+  - `delegate.rs` — App delegate handling window lifecycle and content updates
+  - `view.rs` — WebView wrapper for rendering HTML with Mermaid support
+  - `window.rs` — Window creation and management
+  - `types.rs` — Style preferences and theme management
+- `src/markdown/` — Markdown parsing with syntax highlighting
+- `src/streaming.rs` — Intelligent streaming with boundary detection
+- `src/content.rs` — DocumentContent struct for thread communication
+- `src/menu.rs` — Menu system with preferences and actions
 
 ### Running Locally
 
@@ -124,8 +131,41 @@ defaults delete homo StylePreferences
 ### Available Preferences
 
 - **Font Family**: System, Menlo, Monaco, Helvetica
-- **Font Size**: Adjustable via menu (⌘+ / ⌘- / ⌘0)
-- **Theme**: Light, Dark, System (follows system preference)
+- **Font Size**: Adjustable via keyboard shortcuts or menu
+- **Theme**: Light, Dark, System (follows macOS appearance)
+
+---
+
+## Keyboard Shortcuts
+
+### Font Size
+
+- **⌘ + =** (or **⌘ + +**): Increase font size
+- **⌘ + -**: Decrease font size  
+- **⌘ + 0**: Reset font size to default
+
+### Font Family
+
+- **⌘ + 1**: System font
+- **⌘ + 2**: Menlo font
+- **⌘ + 3**: Monaco font
+- **⌘ + 4**: Helvetica font
+
+### Theme
+
+- **⌘ + L**: Light theme
+- **⌘ + D**: Dark theme
+- **⌘ + S**: System theme (follows macOS appearance)
+
+### View
+
+- **⌘ + T**: Toggle mode (for displaying the raw Markdown)
+
+### Standard macOS
+
+- **⌘ + C**: Copy selected text
+- **⌘ + A**: Select all text
+- **⌘ + W**: Close window
 
 ---
 
