@@ -71,6 +71,128 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             window.scrollTo(0, 0);
         };
         
+        // Create scroll to bottom button
+        window.createScrollToBottomButton = function() {
+            const button = document.createElement('div');
+            button.id = 'scroll-to-bottom-btn';
+            button.innerHTML = '↓';
+            button.style.cssText = `
+                position: fixed;
+                bottom: 16px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 44px;
+                height: 44px;
+                background: white;
+                color: #333;
+                border-radius: 50%;
+                display: none;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                font-size: 22px;
+                font-weight: 900;
+                z-index: 1000;
+                transition: opacity 0.3s ease, transform 0.2s ease;
+                user-select: none;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
+                line-height: 44px;
+                text-align: center;
+                vertical-align: middle;
+            `;
+            
+            // Add hover effect
+            button.addEventListener('mouseenter', function() {
+                this.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.15)';
+            });
+            
+            button.addEventListener('mouseleave', function() {
+                this.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1)';
+            });
+            
+            button.addEventListener('click', function() {
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            });
+            
+            document.body.appendChild(button);
+            return button;
+        };
+        
+        // Function to check if user is near bottom and show/hide button
+        window.updateScrollButton = function() {
+            const scrollButton = document.getElementById('scroll-to-bottom-btn');
+            if (!scrollButton) return;
+            
+            const isNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
+            
+            if (isNearBottom) {
+                scrollButton.style.opacity = '0';
+                setTimeout(function() {
+                    if (scrollButton.style.opacity === '0') {
+                        scrollButton.style.display = 'none';
+                    }
+                }, 300); // Match the transition duration
+            } else {
+                scrollButton.style.display = 'flex';
+                setTimeout(function() {
+                    scrollButton.style.opacity = '1';
+                }, 10); // Small delay to ensure display change happens first
+            }
+        };
+        
+        // Track scroll state for showing/hiding during scroll
+        window.scrollTimeout = null;
+        window.hideTimeout = null;
+        window.isScrolling = false;
+        
+        window.handleScroll = function() {
+            const scrollButton = document.getElementById('scroll-to-bottom-btn');
+            if (!scrollButton) return;
+            
+            const isNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
+            
+            // Don't show button if near bottom
+            if (isNearBottom) {
+                scrollButton.style.opacity = '0';
+                scrollButton.style.display = 'none';
+                return;
+            }
+            
+            // Show button when scrolling starts
+            if (!window.isScrolling) {
+                window.isScrolling = true;
+                scrollButton.style.display = 'flex';
+                setTimeout(function() {
+                    scrollButton.style.opacity = '1';
+                }, 10);
+            }
+            
+            // Clear existing timeouts
+            clearTimeout(window.scrollTimeout);
+            clearTimeout(window.hideTimeout);
+            
+            // Set timeout to hide button after scrolling stops
+            window.scrollTimeout = setTimeout(function() {
+                window.isScrolling = false;
+                
+                // Hide button after a delay when scrolling stops
+                window.hideTimeout = setTimeout(function() {
+                    const isStillNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
+                    if (!isStillNearBottom && !window.isScrolling) {
+                        scrollButton.style.opacity = '0';
+                        setTimeout(function() {
+                            if (scrollButton.style.opacity === '0') {
+                                scrollButton.style.display = 'none';
+                            }
+                        }, 300);
+                    }
+                }, 2000); // Hide after 2 seconds of no scrolling
+            }, 150); // 150ms after scroll stops
+        };
+
         // Content appending function
         window.appendContent = function(htmlContent) {
             // Check if user was near the bottom before adding content
@@ -87,7 +209,6 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                     behavior: 'smooth'
                 });
             }
-            // If user wasn't near bottom, preserve their scroll position (do nothing)
             
             // Re-initialize Mermaid for any new diagrams
             if (typeof mermaid !== 'undefined') {
@@ -106,8 +227,22 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             }
         };
         
-        // Listen for append messages from the Rust side
+        // Initialize everything when DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, initializing scroll button...');
+            
+            // Create the scroll to bottom button
+            const scrollButton = window.createScrollToBottomButton();
+            console.log('Scroll button created:', scrollButton);
+            
+            // Set up scroll event listener to show/hide button with fade during scroll
+            window.addEventListener('scroll', function() {
+                window.handleScroll();
+            });
+            
+            // Initial button state check - don't show initially, let user scrolling trigger it
+            // The button will appear when user starts scrolling
+            
             // Set up a global handler for append operations
             window.handleAppendMessage = function(htmlContent) {
                 window.appendContent(htmlContent);
@@ -388,6 +523,24 @@ impl MarkdownView {
 </head>
 <body onload="{onload_script}">
 {content}
+<script>
+// Initialize scroll to bottom button for regular content updates
+setTimeout(function() {{
+    console.log('Trying to create scroll button...');
+    if (typeof window.createScrollToBottomButton === 'function') {{
+        console.log('Creating scroll button from inline script...');
+        window.createScrollToBottomButton();
+        window.addEventListener('scroll', function() {{
+            window.handleScroll();
+        }});
+        setTimeout(function() {{
+            window.updateScrollButton();
+        }}, 100);
+    }} else {{
+        console.log('createScrollToBottomButton function not available');
+    }}
+}}, 200);
+</script>
 </body>
 </html>"#
         );
@@ -444,6 +597,24 @@ impl MarkdownView {
 </head>
 <body onload="{onload_script}">
 {content}
+<script>
+// Initialize scroll to bottom button for mode toggle
+setTimeout(function() {{
+    console.log('Trying to create scroll button in mode toggle...');
+    if (typeof window.createScrollToBottomButton === 'function') {{
+        console.log('Creating scroll button from mode toggle...');
+        window.createScrollToBottomButton();
+        window.addEventListener('scroll', function() {{
+            window.handleScroll();
+        }});
+        setTimeout(function() {{
+            window.updateScrollButton();
+        }}, 100);
+    }} else {{
+        console.log('createScrollToBottomButton function not available in mode toggle');
+    }}
+}}, 200);
+</script>
 </body>
 </html>"#
         );
