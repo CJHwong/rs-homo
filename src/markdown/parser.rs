@@ -16,14 +16,6 @@ pub fn parse_markdown(markdown_input: &str) -> String {
     parse_markdown_with_theme(markdown_input, &ThemeMode::System)
 }
 
-/// Parses a chunk of markdown content for incremental updates.
-/// This is optimized for simple content that doesn't span multiple chunks.
-pub fn parse_markdown_chunk(chunk: &str, theme_mode: &ThemeMode) -> String {
-    // For now, use the same full parsing logic
-    // TODO: Implement optimized chunk parsing for simple cases
-    parse_markdown_with_theme(chunk, theme_mode)
-}
-
 /// Parses a string of Markdown text and converts it into an HTML string with theme-aware syntax highlighting.
 pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -> String {
     let mut options = Options::empty();

@@ -3,5 +3,5 @@
 mod parser;
 
 pub use parser::{
-    highlight_markdown_with_theme, parse_markdown, parse_markdown_chunk, parse_markdown_with_theme,
+    highlight_markdown_with_theme, parse_markdown, parse_markdown_with_theme,
 };
