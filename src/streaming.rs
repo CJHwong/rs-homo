@@ -5,251 +5,195 @@ use crate::error::AppError;
 use crate::markdown;
 use log::{debug, error, info};
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, BufRead, BufReader, Read};
 use std::sync::mpsc;
 
-const CHUNK_SIZE: usize = 1024; // Read in 1KB chunks
+/// Tracks the state of markdown parsing during streaming
+#[derive(Debug, Clone)]
+struct StreamingState {
+    /// Whether we're currently inside a code block
+    in_code_block: bool,
+    /// The language of the current code block (if any)
+    code_language: String,
+    /// Accumulated markdown content
+    markdown_buffer: String,
+    /// Track if we've sent the first content update
+    sent_first_update: bool,
+    /// Lines accumulated since last update
+    lines_since_update: usize,
+}
 
-/// Checks if we're currently inside a code block
-fn is_inside_code_block(content: &str) -> bool {
-    let mut in_code_block = false;
-
-    for line in content.lines() {
+impl StreamingState {
+    fn new() -> Self {
+        Self {
+            in_code_block: false,
+            code_language: String::new(),
+            markdown_buffer: String::new(),
+            sent_first_update: false,
+            lines_since_update: 0,
+        }
+    }
+    
+    /// Processes a line and returns whether we should send an update
+    fn process_line(&mut self, line: &str) -> bool {
+        self.lines_since_update += 1;
+        self.markdown_buffer.push_str(line);
+        self.markdown_buffer.push('\n');
+        
         let trimmed = line.trim();
+        
+        // Check for code block start/end
         if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-        }
-    }
-
-    in_code_block
-}
-
-/// Checks if we can safely parse at this position (at a block boundary)
-fn is_safe_parse_boundary(content: &str) -> bool {
-    // Safe boundaries are typically:
-    // 1. End of lines (complete lines)
-    // 2. After double newlines (paragraph breaks)
-    // 3. Not in the middle of code blocks or lists
-
-    if content.is_empty() {
-        return false;
-    }
-
-    // Never break if we're inside a code block
-    if is_inside_code_block(content) {
-        return false;
-    }
-
-    // Check if content ends with a complete line
-    if content.ends_with('\n') {
-        // Double newline is always safe (paragraph boundary)
-        if content.ends_with("\n\n") {
-            return true;
-        }
-
-        // Single newline - check if the line before looks complete
-        let lines: Vec<&str> = content.lines().collect();
-        if let Some(last_line) = lines.last() {
-            // Don't break in the middle of potential code blocks
-            // Only avoid breaking if it's an opening code block (not closing)
-            if last_line.starts_with("```") && !last_line.trim().eq("```") {
-                // This is a code block with a language specifier, don't break
-                return false;
-            }
-            // Don't break if we might be in a list continuation
-            if last_line.starts_with("   ") || last_line.starts_with("\t") {
-                return false;
+            if !self.in_code_block {
+                // Starting a code block
+                self.in_code_block = true;
+                self.code_language = trimmed.strip_prefix("```").unwrap_or("").to_string();
+                debug!("Starting code block with language: '{}'", self.code_language);
+            } else {
+                // Ending a code block
+                self.in_code_block = false;
+                self.code_language.clear();
+                debug!("Ending code block");
+                // Always send update after code block ends
+                return true;
             }
         }
-        return true;
-    }
-
-    false
-}
-
-/// Finds the last safe boundary position in the content
-fn find_last_safe_boundary(content: &str, start_pos: usize) -> Option<usize> {
-    let new_content = &content[start_pos..];
-    if new_content.is_empty() {
-        return None;
-    }
-
-    // Look for double newlines first (safest)
-    if let Some(pos) = new_content.rfind("\n\n") {
-        return Some(start_pos + pos + 2); // Include both newlines
-    }
-
-    // Look for single newlines at safe positions
-    if let Some(pos) = new_content.rfind('\n') {
-        let boundary_content = &content[..start_pos + pos + 1];
-        if is_safe_parse_boundary(boundary_content) {
-            return Some(start_pos + pos + 1);
-        }
-    }
-
-    None
-}
-
-/// Reads from stdin in chunks, parses accumulated markdown, and sends ContentUpdate to the GUI.
-pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppError> {
-    debug!("Starting to read from stdin");
-    let mut stdin = io::stdin();
-    let mut buffer = String::new();
-    let mut processed_length = 0;
-    let mut is_first_chunk = true;
-    let mut chunk_count = 0;
-
-    loop {
-        chunk_count += 1;
-        debug!("Reading chunk #{chunk_count}");
-        let mut chunk_buf = vec![0; CHUNK_SIZE];
-
-        debug!("About to read from stdin...");
-        let bytes_read = match stdin.read(&mut chunk_buf) {
-            Ok(bytes) => {
-                debug!("Successfully read {bytes} bytes");
-                bytes
+        
+        // Send update conditions (increased thresholds for better rapid streaming performance):
+        // IMPORTANT: Never send updates while inside a code block to prevent splitting
+        if !self.in_code_block {
+            // 1. First substantial content (after 5 lines, was 3)
+            if !self.sent_first_update && self.lines_since_update >= 5 {
+                return true;
             }
+            
+            // 2. Send update after paragraph breaks (empty lines) with more accumulation
+            if trimmed.is_empty() && self.lines_since_update >= 5 {
+                return true;
+            }
+            
+            // 3. Send update after accumulating more lines to reduce rapid updates
+            if self.lines_since_update >= 10 {
+                return true;
+            }
+        }
+        
+        false
+    }
+    
+    /// Marks that an update was sent and resets counters
+    fn mark_update_sent(&mut self) {
+        self.sent_first_update = true;
+        self.lines_since_update = 0;
+    }
+    
+    /// Gets the current markdown content
+    fn get_content(&self) -> &str {
+        &self.markdown_buffer
+    }
+    
+    /// Clears the buffer (for full replace updates)
+    fn clear_buffer(&mut self) {
+        self.markdown_buffer.clear();
+    }
+}
+
+
+/// Reads from stdin line-by-line using state machine, sending incremental updates to the GUI.
+pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppError> {
+    debug!("Starting stateful line-by-line reading from stdin");
+    let stdin = io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut state = StreamingState::new();
+
+    for (line_num, line_result) in reader.lines().enumerate() {
+        let line = match line_result {
+            Ok(line) => line,
             Err(e) => {
-                error!("Failed to read from stdin: {e}");
+                error!("Failed to read line {}: {}", line_num + 1, e);
                 return Err(AppError::from(e));
             }
         };
 
-        if bytes_read == 0 {
-            debug!("Reached end of input (pipe closed)");
-            // Pipe closed - send any remaining content
-            if processed_length < buffer.len() {
-                let remaining_content = &buffer[processed_length..];
-                let remaining_len = remaining_content.len();
-                debug!("Sending {remaining_len} remaining bytes");
-                if !remaining_content.is_empty() {
-                    let html_chunk = markdown::parse_markdown_chunk(
-                        remaining_content,
-                        &crate::gui::types::ThemeMode::System,
-                    );
-                    match sender.send(ContentUpdate::Append {
-                        markdown: remaining_content.to_string(),
-                        html: html_chunk,
-                    }) {
-                        Ok(()) => debug!("Successfully sent remaining content"),
-                        Err(e) => error!("Failed to send remaining content: {e}"),
-                    }
+        debug!("Processing line {}: {:?}", line_num + 1, line);
+        
+        // Process the line and check if we should send an update
+        let should_update = state.process_line(&line);
+        
+        if should_update {
+            let content = state.get_content().to_string();
+            debug!("Sending update with {} bytes after line {}", content.len(), line_num + 1);
+            
+            // Parse just the new content chunk
+            let html_content = markdown::parse_markdown(&content);
+
+            let update = if state.sent_first_update {
+                // For subsequent updates, use Append with just the new content
+                ContentUpdate::Append {
+                    markdown: content,
+                    html: html_content,
                 }
             } else {
-                debug!("No remaining content to send");
-            }
-            debug!("Exiting read loop");
-            break;
-        }
+                // First update: use FullReplace to establish initial content
+                let document_content = DocumentContent::new(
+                    content,
+                    html_content,
+                    "Piped Input".to_string(),
+                    None,
+                );
+                ContentUpdate::FullReplace(document_content)
+            };
 
-        chunk_buf.truncate(bytes_read);
-        let text_chunk = String::from_utf8_lossy(&chunk_buf);
-        debug!(
-            "Processing text chunk: {:?}",
-            &text_chunk[..text_chunk.len().min(50)]
-        );
-        buffer.push_str(&text_chunk);
-        let buffer_len = buffer.len();
-        debug!("Total buffer length: {buffer_len}");
-
-        if is_first_chunk {
-            debug!("Processing first chunk");
-            // For first chunk, be more lenient - send content if we have a reasonable amount
-            if buffer.len() > 10 {
-                debug!("Buffer length > 10, looking for safe boundary");
-                if let Some(boundary_pos) = find_last_safe_boundary(&buffer, 0) {
-                    debug!("Found safe boundary at position {boundary_pos}");
-                    let safe_content = &buffer[..boundary_pos];
-                    let html_content = markdown::parse_markdown(safe_content);
-                    let document_content = DocumentContent::new(
-                        safe_content.to_string(),
-                        html_content,
-                        "Piped Input".to_string(),
-                        None,
-                    );
-
-                    match sender.send(ContentUpdate::FullReplace(document_content)) {
-                        Ok(()) => {
-                            debug!("Successfully sent first content update");
-                            processed_length = boundary_pos;
-                            is_first_chunk = false;
-                        }
-                        Err(e) => {
-                            error!("Failed to send first content: {e}");
-                            info!("GUI receiver disconnected. Shutting down streaming thread.");
-                            break;
-                        }
-                    }
-                } else if buffer.len() > 100 {
-                    debug!("No safe boundary found but buffer > 100, sending all content");
-                    // If no safe boundary found but we have substantial content, send it anyway
-                    let html_content = markdown::parse_markdown(&buffer);
-                    let document_content = DocumentContent::new(
-                        buffer.clone(),
-                        html_content,
-                        "Piped Input".to_string(),
-                        None,
-                    );
-
-                    match sender.send(ContentUpdate::FullReplace(document_content)) {
-                        Ok(()) => {
-                            debug!("Successfully sent substantial first content");
-                            processed_length = buffer.len();
-                            is_first_chunk = false;
-                        }
-                        Err(e) => {
-                            error!("Failed to send substantial content: {e}");
-                            info!("GUI receiver disconnected. Shutting down streaming thread.");
-                            break;
-                        }
-                    }
-                } else {
-                    let buffer_len = buffer.len();
-                    debug!("Buffer length {buffer_len} not sufficient for first update");
+            match sender.send(update) {
+                Ok(()) => {
+                    debug!("Successfully sent content update after line {}", line_num + 1);
+                    state.mark_update_sent();
+                    state.clear_buffer(); // Clear buffer after successful send
                 }
-            } else {
-                let buffer_len = buffer.len();
-                debug!("Buffer length {buffer_len} too small for first update");
-            }
-        } else {
-            debug!("Processing subsequent chunk");
-            // For subsequent chunks, look for safe boundaries to send incremental updates
-            if let Some(boundary_pos) = find_last_safe_boundary(&buffer, processed_length) {
-                debug!("Found boundary at position {boundary_pos} (processed: {processed_length})");
-                let new_content = &buffer[processed_length..boundary_pos];
-                if !new_content.is_empty() {
-                    let new_content_len = new_content.len();
-                    debug!("Sending {new_content_len} bytes of new content");
-                    let html_chunk = markdown::parse_markdown_chunk(
-                        new_content,
-                        &crate::gui::types::ThemeMode::System,
-                    );
-
-                    match sender.send(ContentUpdate::Append {
-                        markdown: new_content.to_string(),
-                        html: html_chunk,
-                    }) {
-                        Ok(()) => {
-                            debug!("Successfully sent append update");
-                            processed_length = boundary_pos;
-                        }
-                        Err(e) => {
-                            error!("Failed to send append update: {e}");
-                            info!("GUI receiver disconnected. Shutting down streaming thread.");
-                            break;
-                        }
-                    }
-                } else {
-                    debug!("No new content to send (empty between boundaries)");
+                Err(e) => {
+                    error!("Failed to send content update: {e}");
+                    info!("GUI receiver disconnected. Shutting down streaming thread.");
+                    break;
                 }
-            } else {
-                debug!("No safe boundary found for subsequent content");
             }
         }
     }
 
+    // Send any remaining content
+    if !state.get_content().is_empty() {
+        let content = state.get_content().to_string();
+        let html_content = markdown::parse_markdown(&content);
+        
+        let update = if state.sent_first_update {
+            ContentUpdate::Append {
+                markdown: content,
+                html: html_content,
+            }
+        } else {
+            // Final content is also the first content
+            let document_content = DocumentContent::new(
+                content,
+                html_content,
+                "Piped Input".to_string(),
+                None,
+            );
+            ContentUpdate::FullReplace(document_content)
+        };
+
+        match sender.send(update) {
+            Ok(()) => debug!("Successfully sent final content update"),
+            Err(e) => error!("Failed to send final content: {e}"),
+        }
+    }
+
+    debug!("Finished reading from stdin");
     Ok(())
+}
+
+/// Main entry point for reading from stdin pipes.
+/// Uses the new stateful line-by-line approach.
+pub fn read_from_pipe(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppError> {
+    read_from_pipe_stateful(sender)
 }
 
 /// Reads the entire file, parses markdown, and sends ContentUpdate to the GUI.
