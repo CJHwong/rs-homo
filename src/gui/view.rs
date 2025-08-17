@@ -4,6 +4,20 @@ use cacao::pasteboard::Pasteboard;
 use cacao::webview::{InjectAt, WebView, WebViewConfig, WebViewDelegate};
 use log::{debug, info};
 
+/// Safely truncate a string at the given byte limit, respecting Unicode character boundaries
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    
+    let safe_end = s.char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| i >= max_bytes)
+        .unwrap_or(s.len());
+    
+    &s[..safe_end]
+}
+
 #[derive(Clone, Copy)]
 pub enum ScrollBehavior {
     Top,
@@ -194,10 +208,75 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             }, 150); // 150ms after scroll stops
         };
 
-        // Content appending function
+        // Initialize append queue system for sequential processing with retry mechanism
+        window.appendQueue = [];
+        window.isProcessingQueue = false;
+        window.appendStats = { processed: 0, failed: 0 };
+        
+        // Process the next item in the append queue with robust error handling
+        window.processNextAppend = function() {
+            if (window.appendQueue.length === 0) {
+                window.isProcessingQueue = false;
+                console.log('Queue empty. Stats:', window.appendStats);
+                return;
+            }
+            
+            window.isProcessingQueue = true;
+            const queueItem = window.appendQueue.shift();
+            const { htmlContent, retryCount = 0 } = queueItem;
+            
+            try {
+                // Verify DOM is in a good state before appending
+                if (!document.body) {
+                    console.error('Document body not available, requeueing...');
+                    window.appendQueue.unshift({ htmlContent, retryCount: retryCount + 1 });
+                    setTimeout(window.processNextAppend, 100);
+                    return;
+                }
+                
+                const startTime = performance.now();
+                window.doAppendContent(htmlContent);
+                const endTime = performance.now();
+                
+                window.appendStats.processed++;
+                console.log(`Append ${window.appendStats.processed} completed in ${(endTime - startTime).toFixed(2)}ms`);
+                
+                // Process next item with adaptive delay based on processing time
+                const delay = endTime - startTime > 50 ? 20 : 5;
+                setTimeout(window.processNextAppend, delay);
+                
+            } catch (error) {
+                console.error('Error in processNextAppend:', error);
+                window.appendStats.failed++;
+                
+                // Retry mechanism for failed appends
+                if (retryCount < 3) {
+                    console.log(`Retrying append (attempt ${retryCount + 1}/3)...`);
+                    window.appendQueue.unshift({ htmlContent, retryCount: retryCount + 1 });
+                    setTimeout(window.processNextAppend, 50 * (retryCount + 1));
+                } else {
+                    console.error('Max retries exceeded, skipping content:', htmlContent.substring(0, 100));
+                    setTimeout(window.processNextAppend, 10);
+                }
+            }
+        };
+        
+        // Queue-based content appending function with immediate processing trigger
         window.appendContent = function(htmlContent) {
+            // Store as object to support retry metadata
+            window.appendQueue.push({ htmlContent, retryCount: 0 });
+            console.log(`Queued content, queue size: ${window.appendQueue.length}`);
+            
+            if (!window.isProcessingQueue) {
+                // Use requestAnimationFrame for better timing with rendering
+                requestAnimationFrame(window.processNextAppend);
+            }
+        };
+
+        // Core content appending function (synchronous)
+        window.doAppendContent = function(htmlContent) {
             // Check if user was near the bottom before adding content
-            const wasNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
+            const wasNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 300);
             
             const div = document.createElement('div');
             div.innerHTML = htmlContent;
@@ -407,6 +486,7 @@ pub struct MarkdownView {
     current_mode: std::cell::RefCell<ViewMode>,
     accumulated_content: std::cell::RefCell<String>, // HTML content
     accumulated_markdown: std::cell::RefCell<String>, // Original markdown content
+    last_sync_time: std::cell::RefCell<std::time::Instant>,
 }
 
 impl MarkdownView {
@@ -416,6 +496,13 @@ impl MarkdownView {
     #[allow(deprecated)]
     #[allow(unexpected_cfgs)]
     pub fn evaluate_javascript(&self, script: &str) {
+        // Safely truncate very long scripts for logging (respecting Unicode boundaries)
+        let script_preview = if script.len() > 200 {
+            format!("{}...(truncated {} chars)", safe_truncate(script, 200), script.len())
+        } else {
+            script.to_string()
+        };
+        
         self.webview.objc.with_mut(|obj| unsafe {
             use cocoa::base::nil;
             use cocoa::foundation::NSString;
@@ -427,7 +514,7 @@ impl MarkdownView {
             // Call evaluateJavaScript:completionHandler: on the WKWebView
             let _: () = msg_send![obj, evaluateJavaScript:ns_script completionHandler:nil];
 
-            debug!("Executed JavaScript: {script}");
+            debug!("Executed JavaScript: {script_preview}");
         });
     }
 
@@ -448,6 +535,7 @@ impl MarkdownView {
             current_mode: std::cell::RefCell::new(ViewMode::Preview),
             accumulated_content: std::cell::RefCell::new(String::new()),
             accumulated_markdown: std::cell::RefCell::new(String::new()),
+            last_sync_time: std::cell::RefCell::new(std::time::Instant::now()),
         }
     }
 
@@ -467,18 +555,75 @@ impl MarkdownView {
             .borrow_mut()
             .push_str(markdown_chunk);
 
+        // Check if we need to do a periodic sync to ensure content integrity
+        let now = std::time::Instant::now();
+        let mut last_sync = self.last_sync_time.borrow_mut();
+        let should_sync = now.duration_since(*last_sync) >= std::time::Duration::from_secs(5);
+
         // Only append to DOM if we're in preview mode
         if *self.current_mode.borrow() == ViewMode::Preview {
-            // Use true DOM appending via JavaScript execution
-            let escaped_html = html_chunk
-                .replace('\\', "\\\\")
-                .replace('`', "\\`")
-                .replace('\'', "\\'")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r");
+            if should_sync {
+                // Periodic full refresh to ensure integrity
+                debug!("Performing periodic content sync to ensure integrity");
+                let full_content = self.accumulated_content.borrow().clone();
+                let sync_script = format!(
+                    r#"
+                    try {{
+                        // Clear and rebuild content to ensure integrity
+                        document.body.innerHTML = {};
+                        console.log('Periodic sync completed, content length:', document.body.innerHTML.length);
+                        
+                        // Re-initialize scroll button and Mermaid
+                        if (typeof window.createScrollToBottomButton === 'function') {{
+                            window.createScrollToBottomButton();
+                            window.addEventListener('scroll', window.handleScroll);
+                        }}
+                        
+                        if (typeof mermaid !== 'undefined') {{
+                            const mermaidElements = document.querySelectorAll('.mermaid');
+                            mermaidElements.forEach(async (element, index) => {{
+                                const graphDefinition = element.textContent.trim();
+                                try {{
+                                    element.innerHTML = '';
+                                    const {{ svg }} = await mermaid.render(`syncChart${{Date.now()}}_${{index}}`, graphDefinition);
+                                    element.innerHTML = svg;
+                                }} catch (error) {{
+                                    console.error('Mermaid sync error:', error);
+                                }}
+                            }});
+                        }}
+                    }} catch(e) {{
+                        console.error('Sync error:', e);
+                    }}
+                    "#,
+                    serde_json::to_string(&full_content)
+                        .unwrap_or_else(|_| "\"Sync error\"".to_string())
+                );
+                self.evaluate_javascript(&sync_script);
+                *last_sync = now;
+            } else {
+                // Normal incremental append
+                let json_escaped_html = serde_json::to_string(html_chunk)
+                    .unwrap_or_else(|_| "\"Error: Could not escape HTML content\"".to_string());
 
-            let append_script = format!("window.appendContent(`{escaped_html}`);");
-            self.evaluate_javascript(&append_script);
+                // Simplified append script that uses the queue system
+                let append_script = format!(
+                    r#"
+                    try {{
+                        if (typeof window.appendContent === 'function') {{
+                            window.appendContent({json_escaped_html});
+                        }} else {{
+                            console.error('appendContent function not available');
+                        }}
+                    }} catch(e) {{
+                        console.error('JavaScript append error:', e);
+                    }}
+                    "#
+                );
+                
+                debug!("Queuing content append with {} characters of HTML", html_chunk.len());
+                self.evaluate_javascript(&append_script);
+            }
         }
         // If we're in source mode, we'll regenerate the full content when toggling
     }
