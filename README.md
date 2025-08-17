@@ -15,6 +15,7 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 - **Open files directly**: Pass a markdown file as an argument to view it instantly
 - **GitHub-flavored Markdown**: Tables, footnotes, strikethrough, task lists
 - **Mermaid diagram support**: Interactive flowcharts, sequence diagrams, and more
+- **LaTeX/Math rendering**: KaTeX support for mathematical expressions
 - **External link handling**: Opens links in your browser
 - **Customizable appearance**: Font family, size, and theme preferences
 
@@ -95,6 +96,11 @@ homo README.md
 - `src/streaming.rs` — Intelligent streaming with boundary detection
 - `src/content.rs` — DocumentContent struct for thread communication
 - `src/menu.rs` — Menu system with preferences and actions
+- `src/plugins/` — Plugin system for extensible content processing
+  - `manager.rs` — Plugin registration and execution management
+  - `mermaid.rs` — Mermaid diagram rendering plugin
+  - `katex.rs` — LaTeX/math rendering plugin
+- `src/error.rs` — Custom error types and handling
 
 ### Running Locally
 
