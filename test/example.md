@@ -447,8 +447,96 @@ word**bold**word
 </ul>
 </div>
 
+## LaTeX Mathematical Expressions
+
+### Basic Mathematics
+
+Simple equation using `math` language:
+
+```math
+E = mc^2
+```
+
+### Quadratic Formula
+
+Using `latex` language for more complex expressions:
+
+```latex
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+```
+
+### Calculus
+
+Integration example using `tex` language:
+
+```tex
+\int_0^1 x^2 \, dx = \frac{1}{3}
+```
+
+### Advanced Mathematics
+
+Summation notation:
+
+```math
+\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}
+```
+
+Matrix representation:
+
+```latex
+\begin{bmatrix}
+a & b \\
+c & d
+\end{bmatrix}
+\begin{bmatrix}
+x \\
+y
+\end{bmatrix}
+=
+\begin{bmatrix}
+ax + by \\
+cx + dy
+\end{bmatrix}
+```
+
+### Set Theory and Logic
+
+```math
+\forall x \in \mathbb{R}, \exists y \in \mathbb{N} \text{ such that } x < y
+```
+
+### Greek Letters and Symbols
+
+```tex
+\alpha + \beta = \gamma, \quad \pi \approx 3.14159, \quad \Delta x \to 0
+```
+
+### Fractions and Complex Expressions
+
+Euler's identity:
+
+```math
+e^{i\pi} + 1 = 0
+```
+
+Binomial coefficient:
+
+```latex
+\binom{n}{k} = \frac{n!}{k!(n-k)!} = \frac{n(n-1)\cdots(n-k+1)}{k!}
+```
+
+### Limits and Derivatives
+
+```tex
+\lim_{x \to 0} \frac{\sin x}{x} = 1
+```
+
+```math
+\frac{d}{dx} [f(g(x))] = f'(g(x)) \cdot g'(x)
+```
+
 ---
 
 **End of Markdown Test Suite**
 
-*This file tests the comprehensive markdown parsing capabilities of pulldown-cmark.*
+*This file tests the comprehensive markdown parsing capabilities of pulldown-cmark and the plugin system with Mermaid diagrams and LaTeX mathematical expressions.*

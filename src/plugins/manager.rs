@@ -124,6 +124,25 @@ impl PluginManager {
         all_scripts
     }
 
+    /// Get all external CSS URLs from registered plugins
+    pub fn get_all_external_css(&self) -> Vec<String> {
+        let plugins = match self.plugins.read() {
+            Ok(plugins) => plugins,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut all_css = Vec::new();
+
+        for plugin in plugins.iter() {
+            all_css.extend(plugin.get_external_css());
+        }
+
+        // Remove duplicates
+        all_css.sort();
+        all_css.dedup();
+        all_css
+    }
+
     /// Get list of all registered plugins
     #[allow(dead_code)]
     pub fn list_plugins(&self) -> Vec<(String, String)> {
@@ -168,6 +187,10 @@ pub fn initialize_plugins() -> Result<(), Box<dyn std::error::Error>> {
     // Register the Mermaid plugin
     let mermaid_plugin = Box::new(crate::plugins::mermaid::MermaidPlugin::new());
     PLUGIN_MANAGER.register_plugin(mermaid_plugin)?;
+
+    // Register the LaTeX plugin
+    let latex_plugin = Box::new(crate::plugins::katex::LatexPlugin::new());
+    PLUGIN_MANAGER.register_plugin(latex_plugin)?;
 
     log::info!("Plugin system initialized");
     Ok(())

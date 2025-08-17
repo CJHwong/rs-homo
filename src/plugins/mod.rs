@@ -2,6 +2,7 @@ use crate::gui::types::ThemeMode;
 
 pub mod manager;
 pub mod mermaid;
+pub mod katex;
 
 /// Context information passed to plugins during processing
 #[derive(Clone)]
@@ -50,6 +51,11 @@ pub trait Plugin: Send + Sync {
 
     /// Get external script URLs that need to be loaded
     fn get_external_scripts(&self) -> Vec<String>;
+
+    /// Get external CSS URLs that need to be loaded
+    fn get_external_css(&self) -> Vec<String> {
+        Vec::new() // Default implementation returns empty vector
+    }
 
     /// Called when the plugin is initialized
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>>;

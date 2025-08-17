@@ -295,6 +295,9 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             if (typeof window.renderNewMermaidDiagrams === 'function') {
                 window.renderNewMermaidDiagrams(div);
             }
+            if (typeof window.renderNewLatexExpressions === 'function') {
+                window.renderNewLatexExpressions(div);
+            }
         };
         
         // Initialize everything when DOM is ready
@@ -347,6 +350,17 @@ fn generate_scripts_html(content: &DocumentContent) -> String {
         content_id: "main".to_string(),
     };
     
+    let mut html_parts = Vec::new();
+    
+    // Get external CSS URLs
+    let external_css = PLUGIN_MANAGER.get_all_external_css();
+    let external_css_tags: Vec<String> = external_css
+        .iter()
+        .map(|url| format!(r#"<link rel="stylesheet" href="{url}">"#))
+        .collect();
+    
+    html_parts.extend(external_css_tags);
+    
     // Get external script URLs
     let external_scripts = PLUGIN_MANAGER.get_all_external_scripts();
     let external_script_tags: Vec<String> = external_scripts
@@ -354,16 +368,16 @@ fn generate_scripts_html(content: &DocumentContent) -> String {
         .map(|url| format!(r#"<script src="{url}"></script>"#))
         .collect();
     
+    html_parts.extend(external_script_tags);
+    
     // Get plugin JavaScript
     let plugin_js = PLUGIN_MANAGER.get_all_javascript(&context);
     
-    let mut scripts = external_script_tags.join("\n");
-    
     if !plugin_js.is_empty() {
-        scripts.push_str(&format!("\n<script>\n{plugin_js}\n</script>"));
+        html_parts.push(format!("<script>\n{plugin_js}\n</script>"));
     }
     
-    scripts
+    html_parts.join("\n")
 }
 
 #[derive(Default)]
@@ -499,6 +513,9 @@ impl MarkdownView {
                         
                         if (typeof window.renderMermaidDiagrams === 'function') {{
                             window.renderMermaidDiagrams();
+                        }}
+                        if (typeof window.renderLatexExpressions === 'function') {{
+                            window.renderLatexExpressions();
                         }}
                     }} catch(e) {{
                         console.error('Sync error:', e);
