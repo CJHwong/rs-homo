@@ -47,13 +47,11 @@ impl PluginManager {
         let plugins = self.plugins.read().ok()?;
         
         // First check if we have a cached mapping
-        if let Ok(language_map) = self.language_map.read() {
-            if let Some(&plugin_index) = language_map.get(language) {
-                if let Some(plugin) = plugins.get(plugin_index) {
-                    return plugin.process_code_block(content, language, context);
-                }
+        if let Ok(language_map) = self.language_map.read()
+            && let Some(&plugin_index) = language_map.get(language)
+            && let Some(plugin) = plugins.get(plugin_index) {
+                return plugin.process_code_block(content, language, context);
             }
-        }
 
         // If no cached mapping, search through plugins
         for (index, plugin) in plugins.iter().enumerate() {
