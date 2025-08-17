@@ -33,22 +33,25 @@ impl StreamingState {
             lines_since_update: 0,
         }
     }
-    
+
     /// Processes a line and returns whether we should send an update
     fn process_line(&mut self, line: &str) -> bool {
         self.lines_since_update += 1;
         self.markdown_buffer.push_str(line);
         self.markdown_buffer.push('\n');
-        
+
         let trimmed = line.trim();
-        
+
         // Check for code block start/end
         if trimmed.starts_with("```") {
             if !self.in_code_block {
                 // Starting a code block
                 self.in_code_block = true;
                 self.code_language = trimmed.strip_prefix("```").unwrap_or("").to_string();
-                debug!("Starting code block with language: '{}'", self.code_language);
+                debug!(
+                    "Starting code block with language: '{}'",
+                    self.code_language
+                );
             } else {
                 // Ending a code block
                 self.in_code_block = false;
@@ -58,7 +61,7 @@ impl StreamingState {
                 return true;
             }
         }
-        
+
         // Send update conditions (increased thresholds for better rapid streaming performance):
         // IMPORTANT: Never send updates while inside a code block to prevent splitting
         if !self.in_code_block {
@@ -66,38 +69,37 @@ impl StreamingState {
             if !self.sent_first_update && self.lines_since_update >= 5 {
                 return true;
             }
-            
+
             // 2. Send update after paragraph breaks (empty lines) with more accumulation
             if trimmed.is_empty() && self.lines_since_update >= 5 {
                 return true;
             }
-            
+
             // 3. Send update after accumulating more lines to reduce rapid updates
             if self.lines_since_update >= 10 {
                 return true;
             }
         }
-        
+
         false
     }
-    
+
     /// Marks that an update was sent and resets counters
     fn mark_update_sent(&mut self) {
         self.sent_first_update = true;
         self.lines_since_update = 0;
     }
-    
+
     /// Gets the current markdown content
     fn get_content(&self) -> &str {
         &self.markdown_buffer
     }
-    
+
     /// Clears the buffer (for full replace updates)
     fn clear_buffer(&mut self) {
         self.markdown_buffer.clear();
     }
 }
-
 
 /// Reads from stdin line-by-line using state machine, sending incremental updates to the GUI.
 pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<(), AppError> {
@@ -116,14 +118,18 @@ pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<()
         };
 
         debug!("Processing line {}: {:?}", line_num + 1, line);
-        
+
         // Process the line and check if we should send an update
         let should_update = state.process_line(&line);
-        
+
         if should_update {
             let content = state.get_content().to_string();
-            debug!("Sending update with {} bytes after line {}", content.len(), line_num + 1);
-            
+            debug!(
+                "Sending update with {} bytes after line {}",
+                content.len(),
+                line_num + 1
+            );
+
             // Parse just the new content chunk
             let html_content = markdown::parse_markdown(&content);
 
@@ -135,18 +141,17 @@ pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<()
                 }
             } else {
                 // First update: use FullReplace to establish initial content
-                let document_content = DocumentContent::new(
-                    content,
-                    html_content,
-                    "Piped Input".to_string(),
-                    None,
-                );
+                let document_content =
+                    DocumentContent::new(content, html_content, "Piped Input".to_string(), None);
                 ContentUpdate::FullReplace(document_content)
             };
 
             match sender.send(update) {
                 Ok(()) => {
-                    debug!("Successfully sent content update after line {}", line_num + 1);
+                    debug!(
+                        "Successfully sent content update after line {}",
+                        line_num + 1
+                    );
                     state.mark_update_sent();
                     state.clear_buffer(); // Clear buffer after successful send
                 }
@@ -163,7 +168,7 @@ pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<()
     if !state.get_content().is_empty() {
         let content = state.get_content().to_string();
         let html_content = markdown::parse_markdown(&content);
-        
+
         let update = if state.sent_first_update {
             ContentUpdate::Append {
                 markdown: content,
@@ -171,12 +176,8 @@ pub fn read_from_pipe_stateful(sender: mpsc::Sender<ContentUpdate>) -> Result<()
             }
         } else {
             // Final content is also the first content
-            let document_content = DocumentContent::new(
-                content,
-                html_content,
-                "Piped Input".to_string(),
-                None,
-            );
+            let document_content =
+                DocumentContent::new(content, html_content, "Piped Input".to_string(), None);
             ContentUpdate::FullReplace(document_content)
         };
 

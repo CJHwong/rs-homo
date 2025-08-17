@@ -8,9 +8,7 @@ pub struct LatexPlugin {
 
 impl LatexPlugin {
     pub fn new() -> Self {
-        Self {
-            initialized: false,
-        }
+        Self { initialized: false }
     }
 }
 
@@ -50,8 +48,13 @@ impl Plugin for LatexPlugin {
             .replace('\'', "&#39;");
 
         // Determine if this is display math (block) or inline math
-        let is_display_math = language == "math" || content.trim().starts_with("\\begin") || content.contains("\\\\");
-        let math_class = if is_display_math { "math-display" } else { "math-inline" };
+        let is_display_math =
+            language == "math" || content.trim().starts_with("\\begin") || content.contains("\\\\");
+        let math_class = if is_display_math {
+            "math-display"
+        } else {
+            "math-inline"
+        };
 
         let html = format!(
             r#"<div class="latex-container" data-latex-source="{attr_escaped_raw}">
@@ -73,7 +76,8 @@ impl Plugin for LatexPlugin {
 
     fn get_javascript(&self, context: &PluginContext) -> Option<String> {
         let theme_config = match context.theme_mode {
-            ThemeMode::Light => r#"
+            ThemeMode::Light => {
+                r#"
                 trust: (context) => ['\\htmlId', '\\href'].includes(context.command),
                 strict: false,
                 output: 'htmlAndMathml',
@@ -86,8 +90,10 @@ impl Plugin for LatexPlugin {
                     "\\ZZ": "\\mathbb{Z}",
                     "\\QQ": "\\mathbb{Q}",
                     "\\CC": "\\mathbb{C}"
-                }"#,
-            ThemeMode::Dark => r#"
+                }"#
+            }
+            ThemeMode::Dark => {
+                r#"
                 trust: (context) => ['\\htmlId', '\\href'].includes(context.command),
                 strict: false,
                 output: 'htmlAndMathml',
@@ -100,8 +106,10 @@ impl Plugin for LatexPlugin {
                     "\\ZZ": "\\mathbb{Z}",
                     "\\QQ": "\\mathbb{Q}",
                     "\\CC": "\\mathbb{C}"
-                }"#,
-            ThemeMode::System => r#"
+                }"#
+            }
+            ThemeMode::System => {
+                r#"
                 trust: (context) => ['\\htmlId', '\\href'].includes(context.command),
                 strict: false,
                 output: 'htmlAndMathml',
@@ -114,7 +122,8 @@ impl Plugin for LatexPlugin {
                     "\\ZZ": "\\mathbb{Z}",
                     "\\QQ": "\\mathbb{Q}",
                     "\\CC": "\\mathbb{C}"
-                }"#,
+                }"#
+            }
         };
 
         let javascript = format!(
@@ -363,15 +372,11 @@ window.renderNewLatexExpressions = function(container) {{
     }
 
     fn get_external_scripts(&self) -> Vec<String> {
-        vec![
-            "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js".to_string(),
-        ]
+        vec!["https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js".to_string()]
     }
 
     fn get_external_css(&self) -> Vec<String> {
-        vec![
-            "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css".to_string(),
-        ]
+        vec!["https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css".to_string()]
     }
 
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {

@@ -1,8 +1,8 @@
 use crate::gui::types::ThemeMode;
 
+pub mod katex;
 pub mod manager;
 pub mod mermaid;
-pub mod katex;
 
 /// Context information passed to plugins during processing
 #[derive(Clone)]

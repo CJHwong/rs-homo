@@ -2,6 +2,4 @@
 
 mod parser;
 
-pub use parser::{
-    highlight_markdown_with_theme, parse_markdown, parse_markdown_with_theme,
-};
+pub use parser::{highlight_markdown_with_theme, parse_markdown, parse_markdown_with_theme};

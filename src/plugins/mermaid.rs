@@ -8,9 +8,7 @@ pub struct MermaidPlugin {
 
 impl MermaidPlugin {
     pub fn new() -> Self {
-        Self {
-            initialized: false,
-        }
+        Self { initialized: false }
     }
 }
 
@@ -69,7 +67,8 @@ impl Plugin for MermaidPlugin {
 
     fn get_javascript(&self, context: &PluginContext) -> Option<String> {
         let theme_config = match context.theme_mode {
-            ThemeMode::Light => r#"
+            ThemeMode::Light => {
+                r#"
                 theme: 'base',
                 themeVariables: {
                     primaryColor: '#ff6b35',
@@ -78,8 +77,10 @@ impl Plugin for MermaidPlugin {
                     lineColor: '#57606a',
                     secondaryColor: '#f6f8fa',
                     tertiaryColor: '#ffffff'
-                }"#,
-            ThemeMode::Dark => r#"
+                }"#
+            }
+            ThemeMode::Dark => {
+                r#"
                 theme: 'dark',
                 themeVariables: {
                     primaryColor: '#ff6b35',
@@ -88,8 +89,10 @@ impl Plugin for MermaidPlugin {
                     lineColor: '#8b949e',
                     secondaryColor: '#21262d',
                     tertiaryColor: '#161b22'
-                }"#,
-            ThemeMode::System => r#"
+                }"#
+            }
+            ThemeMode::System => {
+                r#"
                 theme: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'base',
                 themeVariables: {
                     primaryColor: '#ff6b35',
@@ -98,7 +101,8 @@ impl Plugin for MermaidPlugin {
                     lineColor: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#8b949e' : '#57606a',
                     secondaryColor: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#21262d' : '#f6f8fa',
                     tertiaryColor: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#161b22' : '#ffffff'
-                }"#,
+                }"#
+            }
         };
 
         let javascript = format!(

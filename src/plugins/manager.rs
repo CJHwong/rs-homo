@@ -19,14 +19,20 @@ impl PluginManager {
     }
 
     /// Register a plugin with the manager
-    pub fn register_plugin(&self, mut plugin: Box<dyn Plugin>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn register_plugin(
+        &self,
+        mut plugin: Box<dyn Plugin>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Initialize the plugin
         plugin.initialize()?;
 
         let plugin_name = plugin.name();
         log::info!("Registering plugin: {plugin_name}");
 
-        let mut plugins = self.plugins.write().map_err(|_| "Failed to acquire plugins write lock")?;
+        let mut plugins = self
+            .plugins
+            .write()
+            .map_err(|_| "Failed to acquire plugins write lock")?;
 
         let plugin_index = plugins.len();
         plugins.push(plugin);
@@ -45,13 +51,14 @@ impl PluginManager {
         context: &PluginContext,
     ) -> Option<PluginResult> {
         let plugins = self.plugins.read().ok()?;
-        
+
         // First check if we have a cached mapping
         if let Ok(language_map) = self.language_map.read()
             && let Some(&plugin_index) = language_map.get(language)
-            && let Some(plugin) = plugins.get(plugin_index) {
-                return plugin.process_code_block(content, language, context);
-            }
+            && let Some(plugin) = plugins.get(plugin_index)
+        {
+            return plugin.process_code_block(content, language, context);
+        }
 
         // If no cached mapping, search through plugins
         for (index, plugin) in plugins.iter().enumerate() {
@@ -158,8 +165,11 @@ impl PluginManager {
     /// Shutdown all plugins
     #[allow(dead_code)]
     pub fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut plugins = self.plugins.write().map_err(|_| "Failed to acquire plugins write lock")?;
-        
+        let mut plugins = self
+            .plugins
+            .write()
+            .map_err(|_| "Failed to acquire plugins write lock")?;
+
         for plugin in plugins.iter_mut() {
             if let Err(e) = plugin.shutdown() {
                 log::warn!("Error shutting down plugin {}: {}", plugin.name(), e);

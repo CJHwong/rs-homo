@@ -10,12 +10,13 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    
-    let safe_end = s.char_indices()
+
+    let safe_end = s
+        .char_indices()
         .map(|(i, _)| i)
         .find(|&i| i >= max_bytes)
         .unwrap_or(s.len());
-    
+
     &s[..safe_end]
 }
 
@@ -326,16 +327,16 @@ const LINK_INTERCEPTOR_JS: &str = r#"
 
 fn generate_stylesheet(content: &DocumentContent) -> String {
     let base_css = content.style_preferences.generate_css();
-    
+
     // Get plugin CSS
     let context = PluginContext {
         theme_mode: content.style_preferences.theme.clone(),
         is_streaming: false,
         content_id: "main".to_string(),
     };
-    
+
     let plugin_css = PLUGIN_MANAGER.get_all_css(&context);
-    
+
     if plugin_css.is_empty() {
         base_css
     } else {
@@ -349,34 +350,34 @@ fn generate_scripts_html(content: &DocumentContent) -> String {
         is_streaming: false,
         content_id: "main".to_string(),
     };
-    
+
     let mut html_parts = Vec::new();
-    
+
     // Get external CSS URLs
     let external_css = PLUGIN_MANAGER.get_all_external_css();
     let external_css_tags: Vec<String> = external_css
         .iter()
         .map(|url| format!(r#"<link rel="stylesheet" href="{url}">"#))
         .collect();
-    
+
     html_parts.extend(external_css_tags);
-    
+
     // Get external script URLs
     let external_scripts = PLUGIN_MANAGER.get_all_external_scripts();
     let external_script_tags: Vec<String> = external_scripts
         .iter()
         .map(|url| format!(r#"<script src="{url}"></script>"#))
         .collect();
-    
+
     html_parts.extend(external_script_tags);
-    
+
     // Get plugin JavaScript
     let plugin_js = PLUGIN_MANAGER.get_all_javascript(&context);
-    
+
     if !plugin_js.is_empty() {
         html_parts.push(format!("<script>\n{plugin_js}\n</script>"));
     }
-    
+
     html_parts.join("\n")
 }
 
@@ -430,11 +431,15 @@ impl MarkdownView {
     pub fn evaluate_javascript(&self, script: &str) {
         // Safely truncate very long scripts for logging (respecting Unicode boundaries)
         let script_preview = if script.len() > 200 {
-            format!("{}...(truncated {} chars)", safe_truncate(script, 200), script.len())
+            format!(
+                "{}...(truncated {} chars)",
+                safe_truncate(script, 200),
+                script.len()
+            )
         } else {
             script.to_string()
         };
-        
+
         self.webview.objc.with_mut(|obj| unsafe {
             use cocoa::base::nil;
             use cocoa::foundation::NSString;
@@ -545,8 +550,11 @@ impl MarkdownView {
                     }}
                     "#
                 );
-                
-                debug!("Queuing content append with {} characters of HTML", html_chunk.len());
+
+                debug!(
+                    "Queuing content append with {} characters of HTML",
+                    html_chunk.len()
+                );
                 self.evaluate_javascript(&append_script);
             }
         }
@@ -656,14 +664,14 @@ setTimeout(function() {{
             is_streaming: false,
             content_id: "toggle".to_string(),
         };
-        
+
         let plugin_css = PLUGIN_MANAGER.get_all_css(&context);
         let stylesheet = if plugin_css.is_empty() {
             base_css
         } else {
             format!("{base_css}\n\n/* Plugin Styles */\n{plugin_css}")
         };
-        
+
         let scripts = generate_scripts_html(&DocumentContent {
             markdown: self.accumulated_markdown.borrow().clone(),
             html: content.clone(),
@@ -672,7 +680,7 @@ setTimeout(function() {{
             file_path: None,
             style_preferences: style_preferences.clone(),
         });
-        
+
         let onload_script = "window.scrollToTop();";
         let full_html = format!(
             r#"<!DOCTYPE html>
