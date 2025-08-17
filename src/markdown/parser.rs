@@ -5,6 +5,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 use crate::gui::types::ThemeMode;
+use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
 
 const LIGHT_THEME: &str = "InspiredGitHub";
 const DARK_THEME: &str = "base16-ocean.dark";
@@ -53,33 +54,22 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
 
-                // Special handling for Mermaid diagrams
-                if code_block_language == "mermaid" {
-                    // Create a div with mermaid class, copy button, and proper escaping
-                    // For Mermaid rendering: use raw content (Mermaid.js handles it)
-                    // For HTML display in <pre><code>: escape HTML entities
-                    let html_escaped_content = code_block_text
-                        .replace('&', "&amp;")
-                        .replace('<', "&lt;")
-                        .replace('>', "&gt;");
-                    // For data attribute: escape HTML attribute value
-                    let attr_escaped_raw = code_block_text
-                        .replace('&', "&amp;")
-                        .replace('"', "&quot;")
-                        .replace('\'', "&#39;");
-                    let html = format!(
-                        "<div class=\"mermaid-container\" data-mermaid-source=\"{attr_escaped_raw}\">\
-                         <div class=\"mermaid-buttons\">\
-                         <button class=\"mermaid-toggle-btn\" onclick=\"toggleMermaidView(this)\" title=\"Toggle rendered/raw view\">View</button>\
-                         <button class=\"mermaid-copy-btn\" onclick=\"copyMermaidCode(this)\" title=\"Copy Mermaid source\">Copy</button>\
-                         </div>\
-                         <div class=\"mermaid\">{code_block_text}</div>\
-                         <pre class=\"mermaid-raw\" style=\"display: none;\"><code>{html_escaped_content}</code></pre>\
-                         </div>"
-                    );
-                    html_output.push_str(&html);
+                // Try to process with plugin system first
+                let context = PluginContext {
+                    theme_mode: theme_mode.clone(),
+                    is_streaming: false,
+                    content_id: format!("block_{}", html_output.len()),
+                };
+
+                if let Some(plugin_result) = PLUGIN_MANAGER.process_code_block(
+                    &code_block_text,
+                    &code_block_language,
+                    &context,
+                ) {
+                    // Plugin handled the code block
+                    html_output.push_str(&plugin_result.html);
                 } else {
-                    // Standard syntax highlighting for other code blocks
+                    // Fallback to standard syntax highlighting
                     let syntax = ps
                         .find_syntax_by_token(&code_block_language)
                         .unwrap_or_else(|| ps.find_syntax_by_token("txt").unwrap());

@@ -1,5 +1,6 @@
 use crate::content::{DocumentContent, ViewMode};
 use crate::markdown;
+use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
 use cacao::pasteboard::Pasteboard;
 use cacao::webview::{InjectAt, WebView, WebViewConfig, WebViewDelegate};
 use log::{debug, info};
@@ -290,20 +291,9 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 });
             }
             
-            // Re-initialize Mermaid for any new diagrams
-            if (typeof mermaid !== 'undefined') {
-                const newMermaidElements = div.querySelectorAll('.mermaid');
-                newMermaidElements.forEach(async (element, index) => {
-                    const graphDefinition = element.textContent.trim();
-                    try {
-                        element.innerHTML = '';
-                        const { svg } = await mermaid.render(`appendedChart${Date.now()}_${index}`, graphDefinition);
-                        element.innerHTML = svg;
-                    } catch (error) {
-                        console.error('Mermaid rendering error for appended content:', error);
-                        element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';
-                    }
-                });
+            // Re-initialize plugins for any new content
+            if (typeof window.renderNewMermaidDiagrams === 'function') {
+                window.renderNewMermaidDiagrams(div);
             }
         };
         
@@ -328,124 +318,52 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 window.appendContent(htmlContent);
             };
         });
-        
-        // Copy function for Mermaid diagrams
-        window.copyMermaidCode = function(button) {
-            const container = button.closest('.mermaid-container');
-            const rawSource = container.getAttribute('data-mermaid-source');
-            // Unescape HTML entities from data attribute
-            const unescapedCode = rawSource
-                .replace(/&amp;/g, '&')
-                .replace(/&quot;/g, '"')
-                .replace(/&#39;/g, "'");
-            window.webkit.messageHandlers.copyText.postMessage(unescapedCode);
-        };
-        
-        // Toggle function for Mermaid rendered/raw view
-        window.toggleMermaidView = function(button) {
-            const container = button.closest('.mermaid-container');
-            const renderedView = container.querySelector('.mermaid');
-            const rawView = container.querySelector('.mermaid-raw');
-            
-            if (renderedView.style.display === 'none') {
-                // Switch to rendered view
-                renderedView.style.display = 'block';
-                rawView.style.display = 'none';
-                button.textContent = 'View';
-                button.title = 'Toggle rendered/raw view';
-            } else {
-                // Switch to raw view
-                renderedView.style.display = 'none';
-                rawView.style.display = 'block';
-                button.textContent = 'Raw';
-                button.title = 'Toggle rendered/raw view';
-            }
-        };
-        
-        // Initialize Mermaid when available
-        if (typeof mermaid !== 'undefined') {
-            // Determine theme based on current color scheme
-            const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ||
-                          getComputedStyle(document.body).backgroundColor === 'rgb(13, 17, 23)';
-            
-            mermaid.initialize({
-                startOnLoad: false,  // Change to false to manually control rendering
-                theme: isDark ? 'dark' : 'base',
-                themeVariables: {
-                    primaryColor: '#ff6b35',
-                    primaryTextColor: isDark ? '#f0f6fc' : '#24292f',
-                    primaryBorderColor: isDark ? '#30363d' : '#d1d9e0',
-                    lineColor: isDark ? '#8b949e' : '#57606a',
-                    secondaryColor: isDark ? '#21262d' : '#f6f8fa',
-                    tertiaryColor: isDark ? '#161b22' : '#ffffff'
-                }
-            });
-            
-            // Use setTimeout to ensure DOM is fully loaded
-            setTimeout(() => {
-                // Manually render all mermaid diagrams
-                const mermaidElements = document.querySelectorAll('.mermaid');
-                console.log('Found', mermaidElements.length, 'mermaid elements');
-                
-                mermaidElements.forEach(async (element, index) => {
-                    const graphDefinition = element.textContent.trim();
-                    console.log('Rendering mermaid diagram', index, 'with content length:', graphDefinition.length);
-                    console.log('First 100 chars:', graphDefinition.substring(0, 100));
-                    
-                    try {
-                        // Clear the element first
-                        element.innerHTML = '';
-                        
-                        // Use the modern async API
-                        const { svg } = await mermaid.render(`mermaidChart${index}`, graphDefinition);
-                        element.innerHTML = svg;
-                        console.log('Successfully rendered diagram', index);
-                    } catch (error) {
-                        console.error('Mermaid rendering error for diagram', index, ':', error);
-                        element.innerHTML = '<div style="color: red; padding: 10px; font-family: monospace;">Mermaid rendering error: ' + error.message + '<br/>Content: ' + graphDefinition.substring(0, 100) + '...</div>';
-                    }
-                });
-            }, 100);
-            
-            // Re-render mermaid diagrams when theme changes
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme: e.matches ? 'dark' : 'base',
-                    themeVariables: {
-                        primaryColor: '#ff6b35',
-                        primaryTextColor: e.matches ? '#f0f6fc' : '#24292f',
-                        primaryBorderColor: e.matches ? '#30363d' : '#d1d9e0',
-                        lineColor: e.matches ? '#8b949e' : '#57606a',
-                        secondaryColor: e.matches ? '#21262d' : '#f6f8fa',
-                        tertiaryColor: e.matches ? '#161b22' : '#ffffff'
-                    }
-                });
-                
-                // Re-render all mermaid diagrams
-                const mermaidElements = document.querySelectorAll('.mermaid');
-                mermaidElements.forEach(async (element, index) => {
-                    // Get the original content from the raw version
-                    const container = element.closest('.mermaid-container');
-                    const rawElement = container.querySelector('.mermaid-raw code');
-                    const graphDefinition = rawElement ? rawElement.textContent.trim() : element.textContent.trim();
-                    
-                    try {
-                        element.innerHTML = '';
-                        const { svg } = await mermaid.render(`mermaidChart${index}_${Date.now()}`, graphDefinition);
-                        element.innerHTML = svg;
-                    } catch (error) {
-                        console.error('Mermaid re-rendering error:', error);
-                        element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';
-                    }
-                });
-            });
-        }
     });
 "#;
 
 fn generate_stylesheet(content: &DocumentContent) -> String {
-    content.style_preferences.generate_css()
+    let base_css = content.style_preferences.generate_css();
+    
+    // Get plugin CSS
+    let context = PluginContext {
+        theme_mode: content.style_preferences.theme.clone(),
+        is_streaming: false,
+        content_id: "main".to_string(),
+    };
+    
+    let plugin_css = PLUGIN_MANAGER.get_all_css(&context);
+    
+    if plugin_css.is_empty() {
+        base_css
+    } else {
+        format!("{base_css}\n\n/* Plugin Styles */\n{plugin_css}")
+    }
+}
+
+fn generate_scripts_html(content: &DocumentContent) -> String {
+    let context = PluginContext {
+        theme_mode: content.style_preferences.theme.clone(),
+        is_streaming: false,
+        content_id: "main".to_string(),
+    };
+    
+    // Get external script URLs
+    let external_scripts = PLUGIN_MANAGER.get_all_external_scripts();
+    let external_script_tags: Vec<String> = external_scripts
+        .iter()
+        .map(|url| format!(r#"<script src="{url}"></script>"#))
+        .collect();
+    
+    // Get plugin JavaScript
+    let plugin_js = PLUGIN_MANAGER.get_all_javascript(&context);
+    
+    let mut scripts = external_script_tags.join("\n");
+    
+    if !plugin_js.is_empty() {
+        scripts.push_str(&format!("\n<script>\n{plugin_js}\n</script>"));
+    }
+    
+    scripts
 }
 
 #[derive(Default)]
@@ -573,24 +491,14 @@ impl MarkdownView {
                         document.body.innerHTML = {};
                         console.log('Periodic sync completed, content length:', document.body.innerHTML.length);
                         
-                        // Re-initialize scroll button and Mermaid
+                        // Re-initialize scroll button and plugins
                         if (typeof window.createScrollToBottomButton === 'function') {{
                             window.createScrollToBottomButton();
                             window.addEventListener('scroll', window.handleScroll);
                         }}
                         
-                        if (typeof mermaid !== 'undefined') {{
-                            const mermaidElements = document.querySelectorAll('.mermaid');
-                            mermaidElements.forEach(async (element, index) => {{
-                                const graphDefinition = element.textContent.trim();
-                                try {{
-                                    element.innerHTML = '';
-                                    const {{ svg }} = await mermaid.render(`syncChart${{Date.now()}}_${{index}}`, graphDefinition);
-                                    element.innerHTML = svg;
-                                }} catch (error) {{
-                                    console.error('Mermaid sync error:', error);
-                                }}
-                            }});
+                        if (typeof window.renderMermaidDiagrams === 'function') {{
+                            window.renderMermaidDiagrams();
                         }}
                     }} catch(e) {{
                         console.error('Sync error:', e);
@@ -652,13 +560,14 @@ impl MarkdownView {
         };
 
         let stylesheet = generate_stylesheet(document_content);
+        let scripts = generate_scripts_html(document_content);
         let full_html = format!(
             r#"<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
     <style>{stylesheet}</style>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.9.0/dist/mermaid.min.js"></script>
+    {scripts}
 </head>
 <body onload="{onload_script}">
 {content}
@@ -724,7 +633,29 @@ setTimeout(function() {{
         };
 
         // Do a full reload for mode toggle (this is acceptable since it's user-initiated)
-        let stylesheet = style_preferences.generate_css();
+        let base_css = style_preferences.generate_css();
+        let context = PluginContext {
+            theme_mode: style_preferences.theme.clone(),
+            is_streaming: false,
+            content_id: "toggle".to_string(),
+        };
+        
+        let plugin_css = PLUGIN_MANAGER.get_all_css(&context);
+        let stylesheet = if plugin_css.is_empty() {
+            base_css
+        } else {
+            format!("{base_css}\n\n/* Plugin Styles */\n{plugin_css}")
+        };
+        
+        let scripts = generate_scripts_html(&DocumentContent {
+            markdown: self.accumulated_markdown.borrow().clone(),
+            html: content.clone(),
+            mode: new_mode.clone(),
+            title: "Toggle Mode".to_string(),
+            file_path: None,
+            style_preferences: style_preferences.clone(),
+        });
+        
         let onload_script = "window.scrollToTop();";
         let full_html = format!(
             r#"<!DOCTYPE html>
@@ -732,7 +663,7 @@ setTimeout(function() {{
 <head>
     <meta charset="UTF-8">
     <style>{stylesheet}</style>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    {scripts}
 </head>
 <body onload="{onload_script}">
 {content}

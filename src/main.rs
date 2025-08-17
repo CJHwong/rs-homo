@@ -12,6 +12,7 @@ mod error;
 mod gui;
 mod markdown;
 mod menu;
+mod plugins;
 mod streaming;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,6 +20,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
         .format_timestamp_secs()
         .init();
+
+    // Initialize plugin system
+    if let Err(e) = plugins::manager::initialize_plugins() {
+        error!("Failed to initialize plugin system: {e}");
+    }
 
     debug!("Application starting...");
     let args: Vec<String> = env::args().collect();
