@@ -25,7 +25,7 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 
 ### Download Pre-built Binary (Recommended)
 
-Download the latest release for your platform from the [releases page](https://github.com/yourusername/homo/releases):
+Download the latest release for your platform from the [releases page](https://github.com/CJHwong/rs-homo/releases):
 
 - **macOS (Intel)**: `homo-macos-amd64`
 - **macOS (Apple Silicon)**: `homo-macos-arm64`
