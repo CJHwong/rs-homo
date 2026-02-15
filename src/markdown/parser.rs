@@ -1,4 +1,5 @@
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
+use std::collections::HashMap;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -9,6 +10,33 @@ use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
 
 const LIGHT_THEME: &str = "InspiredGitHub";
 const DARK_THEME: &str = "base16-ocean.dark";
+
+/// Generate a URL-safe slug from heading text (GitHub-style).
+/// Matches GitHub's algorithm: lowercase, drop everything except
+/// letters/numbers/spaces/hyphens, then replace spaces with hyphens.
+/// Consecutive hyphens are preserved (e.g. "A & B" → "a--b").
+fn slugify(text: &str) -> String {
+    let mut slug = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '-' {
+            slug.extend(c.to_lowercase());
+        } else if c == ' ' {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn heading_level_to_u8(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
+}
 
 /// Parses a string of Markdown text and converts it into an HTML string.
 ///
@@ -33,6 +61,7 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
         ThemeMode::Light => LIGHT_THEME,
         ThemeMode::Dark => DARK_THEME,
         ThemeMode::System => LIGHT_THEME, // Default to light for system mode
+        ThemeMode::Paper => LIGHT_THEME,
     };
 
     let theme = &ts.themes[theme_name];
@@ -43,8 +72,36 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
     let mut code_block_language = String::new();
     let mut in_code_block = false;
 
+    // Heading state for generating anchor IDs
+    let mut in_heading = false;
+    let mut heading_level = HeadingLevel::H1;
+    let mut heading_text = String::new(); // plain text for slug
+    let mut heading_html = String::new(); // inner HTML content
+    let mut slug_counts: HashMap<String, usize> = HashMap::new();
+
     for event in parser {
         match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                in_heading = true;
+                heading_level = level;
+                heading_text.clear();
+                heading_html.clear();
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                in_heading = false;
+                let base_slug = slugify(&heading_text);
+                let count = slug_counts.entry(base_slug.clone()).or_insert(0);
+                let id = if *count == 0 {
+                    base_slug
+                } else {
+                    format!("{base_slug}-{count}")
+                };
+                *count += 1;
+                let n = heading_level_to_u8(heading_level);
+                html_output.push_str(&format!("<h{n} id=\"{id}\">"));
+                html_output.push_str(&heading_html);
+                html_output.push_str(&format!("</h{n}>\n"));
+            }
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code_block = true;
                 if let CodeBlockKind::Fenced(lang) = kind {
@@ -99,16 +156,39 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
             Event::Text(text) => {
                 if in_code_block {
                     code_block_text.push_str(&text);
+                } else if in_heading {
+                    heading_text.push_str(&text);
+                    let mut temp = String::new();
+                    html::push_html(&mut temp, std::iter::once(Event::Text(text)));
+                    heading_html.push_str(&temp);
                 } else {
                     let mut temp_html = String::new();
                     html::push_html(&mut temp_html, std::iter::once(Event::Text(text)));
                     html_output.push_str(&temp_html);
                 }
             }
+            Event::Code(text) if in_heading => {
+                heading_text.push_str(&text);
+                let mut temp = String::new();
+                html::push_html(&mut temp, std::iter::once(Event::Code(text)));
+                heading_html.push_str(&temp);
+            }
+            Event::SoftBreak | Event::HardBreak if in_heading => {
+                heading_text.push(' ');
+                let mut temp = String::new();
+                html::push_html(&mut temp, std::iter::once(event));
+                heading_html.push_str(&temp);
+            }
             e => {
-                let mut temp_html = String::new();
-                html::push_html(&mut temp_html, std::iter::once(e));
-                html_output.push_str(&temp_html);
+                if in_heading {
+                    let mut temp = String::new();
+                    html::push_html(&mut temp, std::iter::once(e));
+                    heading_html.push_str(&temp);
+                } else {
+                    let mut temp_html = String::new();
+                    html::push_html(&mut temp_html, std::iter::once(e));
+                    html_output.push_str(&temp_html);
+                }
             }
         }
     }
@@ -128,6 +208,7 @@ pub fn highlight_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMod
         ThemeMode::Light => LIGHT_THEME,
         ThemeMode::Dark => DARK_THEME,
         ThemeMode::System => LIGHT_THEME, // Default to light for system mode
+        ThemeMode::Paper => LIGHT_THEME,
     };
 
     let theme = &ts.themes[theme_name];
@@ -150,4 +231,87 @@ pub fn highlight_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMod
 
     html_output.push_str("</code></pre>");
     html_output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slugify_basic() {
+        assert_eq!(slugify("Hello World"), "hello-world");
+        assert_eq!(slugify("Introduction"), "introduction");
+    }
+
+    #[test]
+    fn test_slugify_special_characters_preserve_double_hyphens() {
+        // "&" is dropped, surrounding spaces each become hyphens → double hyphen
+        assert_eq!(
+            slugify("Current Architecture & Pain Points"),
+            "current-architecture--pain-points"
+        );
+        assert_eq!(
+            slugify("2. Current Architecture & Pain Points"),
+            "2-current-architecture--pain-points"
+        );
+    }
+
+    #[test]
+    fn test_slugify_apostrophe_dropped() {
+        assert_eq!(
+            slugify("Mapping GoFreight's Permission Model to KeyCloak"),
+            "mapping-gofreights-permission-model-to-keycloak"
+        );
+    }
+
+    #[test]
+    fn test_slugify_numbered_headings() {
+        assert_eq!(
+            slugify("4. Mapping GoFreight's Permission Model to KeyCloak"),
+            "4-mapping-gofreights-permission-model-to-keycloak"
+        );
+    }
+
+    #[test]
+    fn test_slugify_hyphens_preserved() {
+        assert_eq!(slugify("pre-existing condition"), "pre-existing-condition");
+    }
+
+    #[test]
+    fn test_slugify_trims_leading_trailing() {
+        assert_eq!(slugify("  hello  "), "hello");
+        assert_eq!(slugify("...hello..."), "hello");
+    }
+
+    #[test]
+    fn test_slugify_mixed_special_chars() {
+        // colons, parens, commas all dropped
+        assert_eq!(
+            slugify("Step 1: Install (Required)"),
+            "step-1-install-required"
+        );
+    }
+
+    #[test]
+    fn test_heading_ids_in_parsed_html() {
+        let html = parse_markdown("## Current Architecture & Pain Points");
+        assert!(
+            html.contains("id=\"current-architecture--pain-points\""),
+            "Expected double hyphen in heading id, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_heading_ids() {
+        let html = parse_markdown("## Foo\n\n## Foo\n\n## Foo");
+        assert!(html.contains("id=\"foo\""), "First heading should be 'foo'");
+        assert!(
+            html.contains("id=\"foo-1\""),
+            "Second heading should be 'foo-1'"
+        );
+        assert!(
+            html.contains("id=\"foo-2\""),
+            "Third heading should be 'foo-2'"
+        );
+    }
 }

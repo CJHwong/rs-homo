@@ -30,8 +30,18 @@ const LINK_INTERCEPTOR_JS: &str = r#"
     window.addEventListener('DOMContentLoaded', (event) => {
         document.addEventListener('click', (e) => {
             let target = e.target.closest('a');
-            if (target && target.href) {
-                if (target.href.startsWith('http')) {
+            if (target) {
+                const href = target.getAttribute('href');
+                if (href && href.startsWith('#')) {
+                    e.preventDefault();
+                    const targetId = decodeURIComponent(href.substring(1));
+                    const targetElement = document.getElementById(targetId);
+                    if (targetElement) {
+                        targetElement.scrollIntoView({ behavior: 'smooth' });
+                    }
+                    return;
+                }
+                if (target.href && target.href.startsWith('http')) {
                     e.preventDefault();
                     window.webkit.messageHandlers.linkClicked.postMessage(target.href);
                 }
