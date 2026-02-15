@@ -389,9 +389,6 @@ table tbody tr:hover {{
 }}
 .mermaid .edgeLabel {{
     background-color: var(--table-row-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    padding: 2px 4px;
 }}
 "#
         ));
