@@ -108,32 +108,33 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 bottom: 16px;
                 left: 50%;
                 transform: translateX(-50%);
-                width: 44px;
-                height: 44px;
-                background: white;
-                color: #333;
+                width: 32px;
+                height: 32px;
+                background: #f6f6f6;
+                color: var(--muted-text-color, #333);
                 border-radius: 50%;
                 display: none;
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
-                font-size: 22px;
+                font-size: 14px;
                 font-weight: 900;
                 z-index: 1000;
                 transition: opacity 0.3s ease, transform 0.2s ease;
                 user-select: none;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1);
-                line-height: 44px;
+                line-height: 1;
                 text-align: center;
-                vertical-align: middle;
             `;
             
             // Add hover effect
             button.addEventListener('mouseenter', function() {
+                this.style.background = '#fefefe';
                 this.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.15)';
             });
-            
+
             button.addEventListener('mouseleave', function() {
+                this.style.background = '#f6f6f6';
                 this.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.1)';
             });
             
@@ -170,54 +171,8 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             }
         };
         
-        // Track scroll state for showing/hiding during scroll
-        window.scrollTimeout = null;
-        window.hideTimeout = null;
-        window.isScrolling = false;
-        
         window.handleScroll = function() {
-            const scrollButton = document.getElementById('scroll-to-bottom-btn');
-            if (!scrollButton) return;
-            
-            const isNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
-            
-            // Don't show button if near bottom
-            if (isNearBottom) {
-                scrollButton.style.opacity = '0';
-                scrollButton.style.display = 'none';
-                return;
-            }
-            
-            // Show button when scrolling starts
-            if (!window.isScrolling) {
-                window.isScrolling = true;
-                scrollButton.style.display = 'flex';
-                setTimeout(function() {
-                    scrollButton.style.opacity = '1';
-                }, 10);
-            }
-            
-            // Clear existing timeouts
-            clearTimeout(window.scrollTimeout);
-            clearTimeout(window.hideTimeout);
-            
-            // Set timeout to hide button after scrolling stops
-            window.scrollTimeout = setTimeout(function() {
-                window.isScrolling = false;
-                
-                // Hide button after a delay when scrolling stops
-                window.hideTimeout = setTimeout(function() {
-                    const isStillNearBottom = (window.innerHeight + window.pageYOffset) >= (document.body.offsetHeight - 100);
-                    if (!isStillNearBottom && !window.isScrolling) {
-                        scrollButton.style.opacity = '0';
-                        setTimeout(function() {
-                            if (scrollButton.style.opacity === '0') {
-                                scrollButton.style.display = 'none';
-                            }
-                        }, 300);
-                    }
-                }, 2000); // Hide after 2 seconds of no scrolling
-            }, 150); // 150ms after scroll stops
+            window.updateScrollButton();
         };
 
         // Initialize append queue system for sequential processing with retry mechanism
@@ -302,6 +257,9 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 });
             }
             
+            // Update scroll button visibility after content change
+            window.updateScrollButton();
+
             // Re-initialize plugins for any new content
             if (typeof window.renderNewMermaidDiagrams === 'function') {
                 window.renderNewMermaidDiagrams(div);
@@ -324,8 +282,10 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 window.handleScroll();
             });
             
-            // Initial button state check - don't show initially, let user scrolling trigger it
-            // The button will appear when user starts scrolling
+            // Show button immediately if content is scrollable
+            setTimeout(function() {
+                window.updateScrollButton();
+            }, 100);
             
             // Set up a global handler for append operations
             window.handleAppendMessage = function(htmlContent) {
