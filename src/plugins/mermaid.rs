@@ -306,7 +306,7 @@ window.renderNewMermaidDiagrams = function(container) {{
     }
 
     fn get_external_scripts(&self) -> Vec<String> {
-        vec!["https://cdn.jsdelivr.net/npm/mermaid@11.9.0/dist/mermaid.min.js".to_string()]
+        vec!["https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js".to_string()]
     }
 
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
