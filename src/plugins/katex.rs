@@ -124,6 +124,22 @@ impl Plugin for LatexPlugin {
                     "\\CC": "\\mathbb{C}"
                 }"#
             }
+            ThemeMode::Paper => {
+                r#"
+                trust: (context) => ['\\htmlId', '\\href'].includes(context.command),
+                strict: false,
+                output: 'htmlAndMathml',
+                displayMode: false,
+                throwOnError: false,
+                errorColor: '#6b5a28',
+                macros: {
+                    "\\RR": "\\mathbb{R}",
+                    "\\NN": "\\mathbb{N}",
+                    "\\ZZ": "\\mathbb{Z}",
+                    "\\QQ": "\\mathbb{Q}",
+                    "\\CC": "\\mathbb{C}"
+                }"#
+            }
         };
 
         let javascript = format!(

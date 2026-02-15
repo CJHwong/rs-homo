@@ -103,6 +103,18 @@ impl Plugin for MermaidPlugin {
                     tertiaryColor: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? '#161b22' : '#ffffff'
                 }"#
             }
+            ThemeMode::Paper => {
+                r#"
+                theme: 'base',
+                themeVariables: {
+                    primaryColor: '#ddd8ce',
+                    primaryTextColor: '#33302a',
+                    primaryBorderColor: '#ddd8ce',
+                    lineColor: '#7a7568',
+                    secondaryColor: '#f3f1ea',
+                    tertiaryColor: '#faf9f5'
+                }"#
+            }
         };
 
         let javascript = format!(

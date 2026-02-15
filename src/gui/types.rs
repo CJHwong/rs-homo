@@ -13,6 +13,7 @@ pub enum FontFamily {
     Menlo,     // SF Mono, Menlo
     Monaco,    // Monaco
     Helvetica, // Helvetica Neue
+    Serif,     // New York, Georgia
 }
 
 impl FontFamily {
@@ -24,6 +25,9 @@ impl FontFamily {
             FontFamily::Menlo => "\"SF Mono\", \"Menlo\", \"Monaco\", monospace",
             FontFamily::Monaco => "\"Monaco\", \"SF Mono\", \"Menlo\", monospace",
             FontFamily::Helvetica => "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+            FontFamily::Serif => {
+                "\"New York\", \"Georgia\", \"Iowan Old Style\", \"Palatino\", serif"
+            }
         }
     }
 }
@@ -34,6 +38,7 @@ pub enum ThemeMode {
     Dark,
     #[default]
     System, // Follow system preference
+    Paper, // Warm paper/sepia notebook look
 }
 
 impl ThemeMode {
@@ -42,6 +47,7 @@ impl ThemeMode {
             ThemeMode::Light => "light",
             ThemeMode::Dark => "dark",
             ThemeMode::System => "light dark",
+            ThemeMode::Paper => "light",
         }
     }
 }
@@ -198,6 +204,21 @@ impl StylePreferences {
 "#,
                 );
             }
+            ThemeMode::Paper => {
+                css.push_str(
+                    r#"    --border-color: #ddd8ce;
+    --code-bg-color: rgba(140, 120, 60, 0.07);
+    --code-text-color: #6b5a28;
+    --pre-bg-color: #f3f1ea;
+    --muted-text-color: #7a7568;
+    --table-row-bg: #fdfcfa;
+    --table-row-alt-bg: #f8f7f3;
+    --table-header-bg: #f5f4f0;
+    --table-row-hover-bg: #f6f5f1;
+    --table-row-alt-hover-bg: #f3f2ed;
+"#,
+                );
+            }
         }
 
         css.push_str("}\n");
@@ -221,6 +242,7 @@ h1, h2, h3, h4, h5, h6 {{
 code {{
     font-family: "SF Mono", "Menlo", "Monaco", monospace;
     background-color: var(--code-bg-color);
+    color: var(--code-text-color, inherit);
     padding: .2em .4em;
     margin: 0;
     font-size: 85%;
@@ -419,6 +441,26 @@ pre code span {
     pre code span {
         opacity: 1 !important;
     }
+}
+"#,
+                );
+            }
+            ThemeMode::Paper => {
+                css.push_str(
+                    r#"body {
+    background-color: #faf9f5;
+    color: #33302a;
+    background-image:
+        linear-gradient(#f5f4f0 1px, transparent 1px),
+        linear-gradient(90deg, #f5f4f0 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-attachment: fixed;
+}
+a {
+    color: #5a4e22;
+}
+a:hover {
+    color: #44391a;
 }
 "#,
                 );

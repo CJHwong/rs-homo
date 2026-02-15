@@ -105,6 +105,9 @@ pub fn create_menus() -> Vec<Menu> {
                 MenuItem::new("Helvetica Font").key("4").action(|| {
                     dispatch_menu_message(MenuMessage::SetFontFamily(FontFamily::Helvetica));
                 }),
+                MenuItem::new("Serif Font").key("5").action(|| {
+                    dispatch_menu_message(MenuMessage::SetFontFamily(FontFamily::Serif));
+                }),
                 MenuItem::Separator,
                 MenuItem::new("Light Theme").key("l").action(|| {
                     dispatch_menu_message(MenuMessage::SetTheme(ThemeMode::Light));
@@ -114,6 +117,9 @@ pub fn create_menus() -> Vec<Menu> {
                 }),
                 MenuItem::new("System Theme").key("s").action(|| {
                     dispatch_menu_message(MenuMessage::SetTheme(ThemeMode::System));
+                }),
+                MenuItem::new("Paper Theme").key("p").action(|| {
+                    dispatch_menu_message(MenuMessage::SetTheme(ThemeMode::Paper));
                 }),
                 MenuItem::Separator,
                 MenuItem::new("Increase Font Size").key("=").action(|| {
