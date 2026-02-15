@@ -88,6 +88,10 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                 window.selectAllText();
             }
         });
+
+        // Disable default WebView context menu (its "Reload" option blanks the page
+        // since content is loaded via loadHTMLString, not from a URL)
+        document.addEventListener('contextmenu', (e) => e.preventDefault());
         
         // Simple scroll functions
         window.scrollToBottom = function() {
