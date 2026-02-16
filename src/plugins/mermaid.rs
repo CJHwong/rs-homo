@@ -52,6 +52,7 @@ impl Plugin for MermaidPlugin {
                 <div class="mermaid-buttons">
                     <button class="mermaid-toggle-btn" onclick="toggleMermaidView(this)" title="Toggle rendered/raw view">View</button>
                     <button class="mermaid-copy-btn" onclick="copyMermaidCode(this)" title="Copy Mermaid source">Copy</button>
+                    <button class="mermaid-copy-btn" onclick="copyMermaidImage(this)" title="Copy diagram as image">Copy Image</button>
                 </div>
                 <div class="mermaid">{content}</div>
                 <pre class="mermaid-raw" style="display: none;"><code>{html_escaped_content}</code></pre>
@@ -120,6 +121,33 @@ impl Plugin for MermaidPlugin {
         let javascript = format!(
             r#"
 // Mermaid Plugin JavaScript
+//
+// Rich Text Copy Flow
+// --------------------
+// Mermaid diagrams are rendered as SVGs, which most paste targets (Notes,
+// Google Docs, etc.) cannot display. To make Cmd+A → Cmd+C produce a
+// fully portable rich document we use a pre-cache + intercept strategy:
+//
+// Step 1 — CACHE: After each diagram renders (renderMermaidDiagrams /
+//   renderNewMermaidDiagrams), cacheMermaidPng() converts the SVG to a
+//   retina (2x) PNG via an off-screen canvas and stores the data URL on
+//   the container element as a `data-png-src` attribute.  The 200ms
+//   setTimeout ensures the SVG has been laid out so getBoundingClientRect
+//   returns correct dimensions.
+//
+// Step 2 — INTERCEPT: A document-level `copy` event listener fires
+//   synchronously when the user presses Cmd+C.  It clones the selected
+//   range, checks for any `.mermaid-container` nodes, and replaces each
+//   one with an <img> whose src is the cached PNG data URL.  The modified
+//   HTML is written to e.clipboardData as text/html (plus the original
+//   plain text as text/plain), then e.preventDefault() stops the default
+//   copy.  If no Mermaid containers are in the selection the handler
+//   returns early and WKWebView's native rich-text copy runs untouched.
+//
+// Step 3 — SINGLE DIAGRAM: The "Copy Image" button calls copyMermaidImage()
+//   which performs the same SVG→canvas→PNG conversion on demand and sends
+//   the base64 data to the native `copyImage` message handler, which
+//   writes it to NSPasteboard as public.png (see src/gui/view.rs).
 
 // Initialize Mermaid when available
 if (typeof mermaid !== 'undefined') {{
@@ -144,6 +172,9 @@ if (typeof mermaid !== 'undefined') {{
                 const {{ svg }} = await mermaid.render(`mermaidChart${{Date.now()}}_${{index}}`, graphDefinition);
                 element.innerHTML = svg;
                 console.log('Successfully rendered diagram', index);
+                // Step 1: pre-cache PNG for the copy event listener (see flow above)
+                const mc = element.closest('.mermaid-container');
+                if (mc) setTimeout(() => window.cacheMermaidPng(mc), 200);
             }} catch (error) {{
                 console.error('Mermaid rendering error for diagram', index, ':', error);
                 element.innerHTML = '<div style="color: red; padding: 10px; font-family: monospace;">Mermaid rendering error: ' + error.message + '</div>';
@@ -177,16 +208,128 @@ if (typeof mermaid !== 'undefined') {{
     }}
 }}
 
-// Copy function for Mermaid diagrams
+// Copy source code for Mermaid diagrams
 window.copyMermaidCode = function(button) {{
     const container = button.closest('.mermaid-container');
     const rawSource = container.getAttribute('data-mermaid-source');
-    const unescapedCode = rawSource
+    const text = rawSource
         .replace(/&amp;/g, '&')
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'");
-    window.webkit.messageHandlers.copyText.postMessage(unescapedCode);
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
 }};
+
+// Step 3 implementation: single-diagram "Copy Image" button.
+// Rasterizes SVG on demand and sends base64 PNG to the native copyImage
+// message handler which writes it to NSPasteboard (see src/gui/view.rs).
+window.copyMermaidImage = function(button) {{
+    const container = button.closest('.mermaid-container');
+    const svgEl = container.querySelector('.mermaid svg');
+    if (!svgEl) return;
+
+    const rect = svgEl.getBoundingClientRect();
+    const scale = 2; // retina-quality output
+
+    // Serialize SVG to a data URL (handles Unicode safely)
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const svgBase64 = btoa(unescape(encodeURIComponent(svgData)));
+    const dataUrl = 'data:image/svg+xml;base64,' + svgBase64;
+
+    const img = new Image();
+    img.onload = function() {{
+        const canvas = document.createElement('canvas');
+        canvas.width = rect.width * scale;
+        canvas.height = rect.height * scale;
+        const ctx = canvas.getContext('2d');
+
+        // Fill with the container's background so dark/light themes look correct
+        const bg = window.getComputedStyle(container.querySelector('.mermaid')).backgroundColor;
+        ctx.fillStyle = bg || '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0, rect.width, rect.height);
+
+        const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
+        window.webkit.messageHandlers.copyImage.postMessage(pngBase64);
+    }};
+    img.onerror = function() {{
+        console.error('Failed to rasterize SVG for image copy');
+    }};
+    img.src = dataUrl;
+}};
+
+// Step 1 implementation: rasterize SVG → retina PNG and store as data-png-src.
+// Called automatically after each render so the synchronous copy handler
+// (Step 2) can embed the image without async work.
+window.cacheMermaidPng = function(container) {{
+    const svgEl = container.querySelector('.mermaid svg');
+    if (!svgEl) return;
+
+    const rect = svgEl.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const scale = 2;
+
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const svgBase64 = btoa(unescape(encodeURIComponent(svgData)));
+
+    const img = new Image();
+    img.onload = function() {{
+        const canvas = document.createElement('canvas');
+        canvas.width = rect.width * scale;
+        canvas.height = rect.height * scale;
+        const ctx = canvas.getContext('2d');
+
+        const bg = window.getComputedStyle(container.querySelector('.mermaid')).backgroundColor;
+        ctx.fillStyle = bg || '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0, rect.width, rect.height);
+
+        container.setAttribute('data-png-src', canvas.toDataURL('image/png'));
+    }};
+    img.src = 'data:image/svg+xml;base64,' + svgBase64;
+}};
+
+// Step 2 implementation: intercept the copy event, swap .mermaid-container
+// nodes in the cloned selection for <img> tags with cached PNGs, and write
+// the result to the clipboard. Falls through to native rich-text copy when
+// no diagrams are in the selection.
+document.addEventListener('copy', function(e) {{
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+
+    const frag = sel.getRangeAt(0).cloneContents();
+    const wrap = document.createElement('div');
+    wrap.appendChild(frag);
+
+    const containers = wrap.querySelectorAll('.mermaid-container');
+    if (containers.length === 0) return; // no diagrams — default rich text is fine
+
+    containers.forEach(mc => {{
+        const pngSrc = mc.getAttribute('data-png-src');
+        if (!pngSrc) return; // cache not ready, leave SVG HTML as-is
+
+        // Replace the entire container with a simple <img>
+        const img = document.createElement('img');
+        img.src = pngSrc;
+        img.alt = 'Mermaid diagram';
+        img.style.maxWidth = '100%';
+        mc.replaceWith(img);
+    }});
+
+    e.clipboardData.setData('text/html', wrap.innerHTML);
+    e.clipboardData.setData('text/plain', sel.toString());
+    e.preventDefault();
+}});
 
 // Toggle function for Mermaid rendered/raw view
 window.toggleMermaidView = function(button) {{
@@ -220,6 +363,9 @@ window.renderNewMermaidDiagrams = function(container) {{
             element.innerHTML = '';
             const {{ svg }} = await mermaid.render(`appendedChart${{Date.now()}}_${{index}}`, graphDefinition);
             element.innerHTML = svg;
+            // Step 1: pre-cache PNG for the copy event listener (see flow above)
+            const mc = element.closest('.mermaid-container');
+            if (mc) setTimeout(() => window.cacheMermaidPng(mc), 200);
         }} catch (error) {{
             console.error('Mermaid rendering error for appended content:', error);
             element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';

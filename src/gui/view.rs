@@ -1,7 +1,6 @@
 use crate::content::{DocumentContent, ViewMode};
 use crate::markdown;
 use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
-use cacao::pasteboard::Pasteboard;
 use cacao::webview::{InjectAt, WebView, WebViewConfig, WebViewDelegate};
 use log::{debug, info};
 
@@ -26,6 +25,29 @@ pub enum ScrollBehavior {
     Bottom,
 }
 
+/// JavaScript injected into every page load to handle WebView interactions.
+///
+/// ## Rich Text Copy Architecture
+///
+/// Copy uses a two-layer approach so that Cmd+A → Cmd+C produces a rich
+/// document with Mermaid diagrams embedded as images:
+///
+/// 1. **Text & basic HTML** — WKWebView's native copy handles this. We do NOT
+///    intercept Cmd+C for normal content; the browser writes both `text/html`
+///    and `text/plain` to the pasteboard automatically.
+///
+/// 2. **Mermaid diagrams** — Handled by the Mermaid plugin's JS (see
+///    `src/plugins/mermaid.rs`). After each diagram renders, its SVG is
+///    rasterized to a retina PNG and cached on the container element as a
+///    `data-png-src` attribute. A `document.addEventListener('copy', ...)`
+///    handler then clones the selection, swaps any `.mermaid-container` nodes
+///    for `<img>` tags using the cached PNGs, and writes the modified HTML to
+///    the clipboard. If no Mermaid containers are in the selection, the handler
+///    returns early and the native copy proceeds unchanged.
+///
+/// 3. **Single-diagram image copy** — The "Copy Image" button on each diagram
+///    sends base64 PNG data to the native `copyImage` message handler, which
+///    writes it to `NSPasteboard` as `public.png` (see `LinkOpenerDelegate`).
 const LINK_INTERCEPTOR_JS: &str = r#"
     window.addEventListener('DOMContentLoaded', (event) => {
         document.addEventListener('click', (e) => {
@@ -48,15 +70,7 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             }
         });
         
-        // Function to copy selected text
-        window.copySelectedText = function() {
-            const selectedText = window.getSelection().toString();
-            if (selectedText.length > 0) {
-                window.webkit.messageHandlers.copyText.postMessage(selectedText);
-            }
-        };
-        
-        // Function to select all text
+        // Select all: scope to document body so margins/chrome are excluded
         window.selectAllText = function() {
             const range = document.createRange();
             range.selectNodeContents(document.body);
@@ -64,24 +78,7 @@ const LINK_INTERCEPTOR_JS: &str = r#"
             selection.removeAllRanges();
             selection.addRange(range);
         };
-        
-        // Handle copy functionality
-        document.addEventListener('keydown', (e) => {
-            if (e.metaKey && e.key === 'c') {
-                console.log('Copy key detected');
-                const selectedText = window.getSelection().toString();
-                console.log('Selected text length:', selectedText.length);
-                if (selectedText.length > 0) {
-                    e.preventDefault();
-                    console.log('Sending copy message to handler');
-                    window.webkit.messageHandlers.copyText.postMessage(selectedText);
-                } else {
-                    console.log('No text selected, allowing default behavior');
-                }
-            }
-        });
-        
-        // Handle select all functionality
+
         document.addEventListener('keydown', (e) => {
             if (e.metaKey && e.key === 'a') {
                 e.preventDefault();
@@ -367,19 +364,37 @@ impl WebViewDelegate for LinkOpenerDelegate {
                 info!("Opening external link: {url}");
                 open::that(url).ok();
             }
-            "copyText" => {
-                let text = body;
-                info!("Copying text to clipboard: {} characters", text.len());
-                debug!("Text content: '{text}'");
+            // Receives base64-encoded PNG data from the Mermaid plugin's
+            // "Copy Image" button and writes it to NSPasteboard as public.png.
+            // Uses NSData's built-in base64 decoding to avoid extra dependencies.
+            "copyImage" => {
+                info!("Copying image to clipboard ({} bytes base64)", body.len());
+                #[allow(deprecated)]
+                unsafe {
+                    use cocoa::base::{id, nil};
+                    use cocoa::foundation::NSString;
+                    use objc::{class, msg_send, sel, sel_impl};
 
-                // Copy to clipboard - try manual implementation
-                let pasteboard = Pasteboard::default();
-                pasteboard.clear_contents();
+                    let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+                    let _: i64 = msg_send![pasteboard, clearContents];
 
-                // Try both the convenience method and manual approach
-                pasteboard.copy_text(text);
+                    let ns_base64 = NSString::alloc(nil).init_str(body);
+                    let ns_data: id = msg_send![class!(NSData), alloc];
+                    let ns_data: id =
+                        msg_send![ns_data, initWithBase64EncodedString:ns_base64 options:0u64];
 
-                info!("Successfully copied to clipboard");
+                    if ns_data != nil {
+                        let png_type = NSString::alloc(nil).init_str("public.png");
+                        let ok: bool = msg_send![pasteboard, setData:ns_data forType:png_type];
+                        if ok {
+                            info!("Successfully copied image to clipboard");
+                        } else {
+                            debug!("Failed to write image data to pasteboard");
+                        }
+                    } else {
+                        debug!("Failed to decode base64 image data");
+                    }
+                }
             }
             _ => {
                 debug!("Unknown message type: {name}");
@@ -432,7 +447,7 @@ impl MarkdownView {
     pub fn new() -> Self {
         let mut config = WebViewConfig::default();
         config.add_handler("linkClicked");
-        config.add_handler("copyText");
+        config.add_handler("copyImage");
         config.add_handler("appendHTML");
 
         // CORRECTED: Use the correct enum variant `InjectAt::Start`.
@@ -595,17 +610,11 @@ setTimeout(function() {{
     }
 
     pub fn copy_selected_text(&self) {
-        // For now, we rely on the JavaScript keyboard handler
-        // This could be enhanced to directly trigger copy via JavaScript evaluation
-        // if that API becomes available in future versions of cacao
-        info!("Copy triggered via menu - use Cmd+C to copy selected text");
+        self.evaluate_javascript("document.execCommand('copy')");
     }
 
     pub fn select_all_text(&self) {
-        // For now, we rely on the JavaScript keyboard handler
-        // This could be enhanced to directly trigger select all via JavaScript evaluation
-        // if that API becomes available in future versions of cacao
-        info!("Select All triggered via menu - use Cmd+A to select all text");
+        self.evaluate_javascript("window.selectAllText()");
     }
 
     pub fn toggle_mode(&self, style_preferences: &crate::gui::types::StylePreferences) {
