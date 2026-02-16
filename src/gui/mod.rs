@@ -4,6 +4,7 @@ use crate::content::ContentUpdate;
 use cacao::appkit::App; // AppDelegate is not used directly here.
 use std::sync::mpsc;
 
+pub mod crab;
 mod delegate;
 pub mod types;
 mod view;
