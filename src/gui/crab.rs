@@ -68,7 +68,8 @@ pub const SPRITE_CSS: &str = r#"
 "#;
 
 /// HTML for just the animated crab sprite (no overlay wrapper).
-pub const SPRITE_HTML: &str = r#"<div class="crab-walker"><div class="crab-bob"><div class="crab-sprite"></div></div></div>"#;
+pub const SPRITE_HTML: &str =
+    r#"<div class="crab-walker"><div class="crab-bob"><div class="crab-sprite"></div></div></div>"#;
 
 // ---------------------------------------------------------------------------
 // Overlay layer — full-screen backdrop that centers the sprite

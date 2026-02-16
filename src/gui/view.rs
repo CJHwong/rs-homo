@@ -661,11 +661,31 @@ impl MarkdownView {
                 format!("window.scrollToRatio({ratio});")
             }
         };
-        let crab_css = if is_preserve { crab::overlay_css() } else { String::new() };
-        let crab_js = if is_preserve { crab::reveal_js(400) } else { String::new() };
-        let crab_overlay = if is_preserve { crab::overlay_html() } else { String::new() };
-        let wrap_open = if is_preserve { crab::CONTENT_WRAP_OPEN } else { "" };
-        let wrap_close = if is_preserve { crab::CONTENT_WRAP_CLOSE } else { "" };
+        let crab_css = if is_preserve {
+            crab::overlay_css()
+        } else {
+            String::new()
+        };
+        let crab_js = if is_preserve {
+            crab::reveal_js(400)
+        } else {
+            String::new()
+        };
+        let crab_overlay = if is_preserve {
+            crab::overlay_html()
+        } else {
+            String::new()
+        };
+        let wrap_open = if is_preserve {
+            crab::CONTENT_WRAP_OPEN
+        } else {
+            ""
+        };
+        let wrap_close = if is_preserve {
+            crab::CONTENT_WRAP_CLOSE
+        } else {
+            ""
+        };
 
         let stylesheet = generate_stylesheet(document_content);
         let scripts = generate_scripts_html(document_content);

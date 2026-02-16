@@ -29,6 +29,9 @@ log = "0.4"
 env_logger = "0.11"
 lazy_static = "1.4"
 
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
