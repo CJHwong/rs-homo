@@ -164,7 +164,8 @@ impl StylePreferences {
         match self.theme {
             ThemeMode::Light => {
                 css.push_str(
-                    r#"    --border-color: #d1d9e0;
+                    r#"    --page-bg: #ffffff;
+    --border-color: #d1d9e0;
     --code-bg-color: rgba(175, 184, 193, 0.2);
     --pre-bg-color: #f6f8fa;
     --muted-text-color: #57606a;
@@ -178,7 +179,8 @@ impl StylePreferences {
             }
             ThemeMode::Dark => {
                 css.push_str(
-                    r#"    --border-color: #30363d;
+                    r#"    --page-bg: #0d1117;
+    --border-color: #30363d;
     --code-bg-color: rgba(110, 118, 129, 0.4);
     --pre-bg-color: #161b22;
     --muted-text-color: #8b949e;
@@ -192,7 +194,8 @@ impl StylePreferences {
             }
             ThemeMode::System => {
                 css.push_str(
-                    r#"    --border-color: #d1d9e0;
+                    r#"    --page-bg: #ffffff;
+    --border-color: #d1d9e0;
     --code-bg-color: rgba(175, 184, 193, 0.2);
     --pre-bg-color: #f6f8fa;
     --muted-text-color: #57606a;
@@ -206,7 +209,8 @@ impl StylePreferences {
             }
             ThemeMode::Paper => {
                 css.push_str(
-                    r#"    --border-color: #ddd8ce;
+                    r#"    --page-bg: #faf9f5;
+    --border-color: #ddd8ce;
     --code-bg-color: rgba(140, 120, 60, 0.07);
     --code-text-color: #6b5a28;
     --pre-bg-color: #f3f1ea;
@@ -222,6 +226,7 @@ impl StylePreferences {
         }
 
         css.push_str("}\n");
+        css.push_str("html { background-color: var(--page-bg); }\n");
 
         // Add the main styles that use the variables
         css.push_str(&format!(
@@ -417,6 +422,7 @@ pre code span {
 /* Dark theme overrides for system theme */
 @media (prefers-color-scheme: dark) {
     :root {
+        --page-bg: #0d1117;
         --border-color: #30363d;
         --code-bg-color: rgba(110, 118, 129, 0.4);
         --pre-bg-color: #161b22;

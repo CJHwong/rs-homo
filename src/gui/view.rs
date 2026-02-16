@@ -1,8 +1,22 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::content::{DocumentContent, ViewMode};
 use crate::markdown;
 use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
 use cacao::webview::{InjectAt, WebView, WebViewConfig, WebViewDelegate};
 use log::{debug, info};
+
+/// Stores the last known scroll ratio (0.0–1.0) as AtomicU64 bits so it can
+/// be written from the message-handler thread and read from the main thread.
+static SCROLL_RATIO: AtomicU64 = AtomicU64::new(0);
+
+fn set_scroll_ratio(ratio: f64) {
+    SCROLL_RATIO.store(ratio.to_bits(), Ordering::Relaxed);
+}
+
+fn get_scroll_ratio() -> f64 {
+    f64::from_bits(SCROLL_RATIO.load(Ordering::Relaxed))
+}
 
 /// Safely truncate a string at the given byte limit, respecting Unicode character boundaries
 fn safe_truncate(s: &str, max_bytes: usize) -> &str {
@@ -23,6 +37,7 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
 pub enum ScrollBehavior {
     Top,
     Bottom,
+    Preserve,
 }
 
 /// JavaScript injected into every page load to handle WebView interactions.
@@ -94,10 +109,74 @@ const LINK_INTERCEPTOR_JS: &str = r#"
         window.scrollToBottom = function() {
             window.scrollTo(0, document.body.scrollHeight);
         };
-        
+
         window.scrollToTop = function() {
             window.scrollTo(0, 0);
         };
+
+        // Restore scroll position by ratio (0..1).
+        // Body starts hidden (opacity:0 set on the <body> tag) so the user
+        // never sees an intermediate wrong position.  We re-apply the ratio
+        // as plugin rendering changes page height, then reveal once stable.
+        window.scrollToRatio = function(r) {
+            __scrollRatio = r;
+            var apply = function() {
+                var max = document.body.scrollHeight - window.innerHeight;
+                if (max > 0) window.scrollTo(0, max * r);
+            };
+            apply();
+            var lastHeight = document.body.scrollHeight;
+            var checks = 0;
+            var stableCount = 0;
+            var settle = setInterval(function() {
+                var h = document.body.scrollHeight;
+                if (h !== lastHeight) {
+                    lastHeight = h;
+                    stableCount = 0;
+                    apply();
+                } else {
+                    stableCount++;
+                }
+                checks++;
+                if (stableCount >= 2 || checks >= 10) {
+                    clearInterval(settle);
+                    apply();
+                    if (typeof window.revealContent === 'function') {
+                        window.revealContent();
+                    } else {
+                        document.body.style.opacity = '1';
+                    }
+                }
+            }, 50);
+        };
+
+        // --- Scroll ratio tracking (sent to native for reload preservation) ---
+        var __scrollRatio = 0;
+        var __scrollThrottle = null;
+        var __resizing = false;
+
+        window.addEventListener('scroll', function() {
+            if (__resizing) return;
+            var max = document.body.scrollHeight - window.innerHeight;
+            __scrollRatio = max > 0 ? window.scrollY / max : 0;
+            if (!__scrollThrottle) {
+                __scrollThrottle = setTimeout(function() {
+                    __scrollThrottle = null;
+                    window.webkit.messageHandlers.scrollRatio.postMessage(
+                        __scrollRatio.toString()
+                    );
+                }, 150);
+            }
+        });
+
+        window.addEventListener('resize', function() {
+            __resizing = true;
+            requestAnimationFrame(function() {
+                var max = document.body.scrollHeight - window.innerHeight;
+                if (max > 0) window.scrollTo(0, max * __scrollRatio);
+                requestAnimationFrame(function() { __resizing = false; });
+            });
+        });
         
         // Create scroll to bottom button
         window.createScrollToBottomButton = function() {
@@ -296,6 +375,8 @@ const LINK_INTERCEPTOR_JS: &str = r#"
     });
 "#;
 
+use super::crab;
+
 fn generate_stylesheet(content: &DocumentContent) -> String {
     let base_css = content.style_preferences.generate_css();
 
@@ -396,6 +477,12 @@ impl WebViewDelegate for LinkOpenerDelegate {
                     }
                 }
             }
+            "scrollRatio" => {
+                if let Ok(ratio) = body.parse::<f64>() {
+                    set_scroll_ratio(ratio);
+                    debug!("Scroll ratio updated: {ratio:.4}");
+                }
+            }
             _ => {
                 debug!("Unknown message type: {name}");
             }
@@ -449,6 +536,7 @@ impl MarkdownView {
         config.add_handler("linkClicked");
         config.add_handler("copyImage");
         config.add_handler("appendHTML");
+        config.add_handler("scrollRatio");
 
         // CORRECTED: Use the correct enum variant `InjectAt::Start`.
         config.add_user_script(LINK_INTERCEPTOR_JS, InjectAt::Start, false);
@@ -463,10 +551,6 @@ impl MarkdownView {
             accumulated_markdown: std::cell::RefCell::new(String::new()),
             last_sync_time: std::cell::RefCell::new(std::time::Instant::now()),
         }
-    }
-
-    pub fn update_content(&self, document_content: &DocumentContent) {
-        self.update_content_with_scroll(document_content, ScrollBehavior::Top);
     }
 
     pub fn append_content(
@@ -568,10 +652,20 @@ impl MarkdownView {
             ),
         };
 
+        let is_preserve = matches!(scroll_behavior, ScrollBehavior::Preserve);
         let onload_script = match scroll_behavior {
-            ScrollBehavior::Bottom => "window.scrollToBottom();",
-            ScrollBehavior::Top => "window.scrollToTop();",
+            ScrollBehavior::Bottom => "window.scrollToBottom();".to_string(),
+            ScrollBehavior::Top => "window.scrollToTop();".to_string(),
+            ScrollBehavior::Preserve => {
+                let ratio = get_scroll_ratio();
+                format!("window.scrollToRatio({ratio});")
+            }
         };
+        let crab_css = if is_preserve { crab::overlay_css() } else { String::new() };
+        let crab_js = if is_preserve { crab::reveal_js(400) } else { String::new() };
+        let crab_overlay = if is_preserve { crab::overlay_html() } else { String::new() };
+        let wrap_open = if is_preserve { crab::CONTENT_WRAP_OPEN } else { "" };
+        let wrap_close = if is_preserve { crab::CONTENT_WRAP_CLOSE } else { "" };
 
         let stylesheet = generate_stylesheet(document_content);
         let scripts = generate_scripts_html(document_content);
@@ -580,11 +674,14 @@ impl MarkdownView {
 <html>
 <head>
     <meta charset="UTF-8">
-    <style>{stylesheet}</style>
+    <style>{stylesheet}{crab_css}</style>
     {scripts}
+    {crab_js}
 </head>
 <body onload="{onload_script}">
+{crab_overlay}{wrap_open}
 {content}
+{wrap_close}
 <script>
 // Initialize scroll to bottom button for regular content updates
 setTimeout(function() {{
@@ -664,17 +761,27 @@ setTimeout(function() {{
             style_preferences: style_preferences.clone(),
         });
 
-        let onload_script = "window.scrollToTop();";
+        let ratio = get_scroll_ratio();
+        let onload_script = format!("window.scrollToRatio({ratio});");
+        let crab_css = crab::overlay_css();
+        let crab_js = crab::reveal_js(400);
+        let crab_overlay = crab::overlay_html();
+        let wrap_open = crab::CONTENT_WRAP_OPEN;
+        let wrap_close = crab::CONTENT_WRAP_CLOSE;
         let full_html = format!(
             r#"<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <style>{stylesheet}</style>
+    <style>{stylesheet}{crab_css}</style>
     {scripts}
+    {crab_js}
 </head>
 <body onload="{onload_script}">
+{crab_overlay}
+{wrap_open}
 {content}
+{wrap_close}
 <script>
 // Initialize scroll to bottom button for mode toggle
 setTimeout(function() {{

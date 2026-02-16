@@ -145,7 +145,8 @@ impl GuiDelegate {
             current_document.style_preferences = self.style_preferences.borrow().clone();
             // Regenerate HTML with new theme for syntax highlighting
             current_document.regenerate_html();
-            self.view.update_content(current_document);
+            self.view
+                .update_content_with_scroll(current_document, ScrollBehavior::Preserve);
         }
     }
 
