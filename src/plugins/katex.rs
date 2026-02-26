@@ -399,8 +399,22 @@ window.renderNewLatexExpressions = function(container) {{
         vec!["https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js".to_string()]
     }
 
+    fn get_external_scripts_with_integrity(&self) -> Vec<(String, String)> {
+        vec![(
+            "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js".to_string(),
+            "sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6".to_string(),
+        )]
+    }
+
     fn get_external_css(&self) -> Vec<String> {
         vec!["https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css".to_string()]
+    }
+
+    fn get_external_css_with_integrity(&self) -> Vec<(String, String)> {
+        vec![(
+            "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css".to_string(),
+            "sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP".to_string(),
+        )]
     }
 
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {

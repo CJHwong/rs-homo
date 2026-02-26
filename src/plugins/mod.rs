@@ -57,6 +57,24 @@ pub trait Plugin: Send + Sync {
         Vec::new() // Default implementation returns empty vector
     }
 
+    /// Get external script URLs with SRI integrity hashes.
+    /// Returns vec of (url, integrity_hash). Empty hash means no SRI.
+    fn get_external_scripts_with_integrity(&self) -> Vec<(String, String)> {
+        self.get_external_scripts()
+            .into_iter()
+            .map(|url| (url, String::new()))
+            .collect()
+    }
+
+    /// Get external CSS URLs with SRI integrity hashes.
+    /// Returns vec of (url, integrity_hash). Empty hash means no SRI.
+    fn get_external_css_with_integrity(&self) -> Vec<(String, String)> {
+        self.get_external_css()
+            .into_iter()
+            .map(|url| (url, String::new()))
+            .collect()
+    }
+
     /// Called when the plugin is initialized
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 

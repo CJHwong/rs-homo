@@ -405,20 +405,36 @@ fn generate_scripts_html(content: &DocumentContent) -> String {
 
     let mut html_parts = Vec::new();
 
-    // Get external CSS URLs
-    let external_css = PLUGIN_MANAGER.get_all_external_css();
+    // Get external CSS URLs with SRI integrity hashes
+    let external_css = PLUGIN_MANAGER.get_all_external_css_with_integrity();
     let external_css_tags: Vec<String> = external_css
         .iter()
-        .map(|url| format!(r#"<link rel="stylesheet" href="{url}">"#))
+        .map(|(url, integrity)| {
+            if integrity.is_empty() {
+                format!(r#"<link rel="stylesheet" href="{url}">"#)
+            } else {
+                format!(
+                    r#"<link rel="stylesheet" href="{url}" integrity="{integrity}" crossorigin="anonymous">"#
+                )
+            }
+        })
         .collect();
 
     html_parts.extend(external_css_tags);
 
-    // Get external script URLs
-    let external_scripts = PLUGIN_MANAGER.get_all_external_scripts();
+    // Get external script URLs with SRI integrity hashes
+    let external_scripts = PLUGIN_MANAGER.get_all_external_scripts_with_integrity();
     let external_script_tags: Vec<String> = external_scripts
         .iter()
-        .map(|url| format!(r#"<script src="{url}"></script>"#))
+        .map(|(url, integrity)| {
+            if integrity.is_empty() {
+                format!(r#"<script src="{url}"></script>"#)
+            } else {
+                format!(
+                    r#"<script src="{url}" integrity="{integrity}" crossorigin="anonymous"></script>"#
+                )
+            }
+        })
         .collect();
 
     html_parts.extend(external_script_tags);

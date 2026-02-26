@@ -463,6 +463,13 @@ window.renderNewMermaidDiagrams = function(container) {{
         vec!["https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js".to_string()]
     }
 
+    fn get_external_scripts_with_integrity(&self) -> Vec<(String, String)> {
+        vec![(
+            "https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js".to_string(),
+            "sha384-1ggI9FC3CkghppRD/XCR4aD+jp4DxwXlJIW0wxhyTLNKuiZEW3c4BwcjKXl0iVAJ".to_string(),
+        )]
+    }
+
     fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Initializing Mermaid plugin v{}", self.version());
         self.initialized = true;

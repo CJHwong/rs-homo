@@ -111,6 +111,7 @@ impl PluginManager {
     }
 
     /// Get all external script URLs from registered plugins
+    #[allow(dead_code)]
     pub fn get_all_external_scripts(&self) -> Vec<String> {
         let plugins = match self.plugins.read() {
             Ok(plugins) => plugins,
@@ -129,7 +130,44 @@ impl PluginManager {
         all_scripts
     }
 
+    /// Get all external script URLs with SRI integrity hashes
+    pub fn get_all_external_scripts_with_integrity(&self) -> Vec<(String, String)> {
+        let plugins = match self.plugins.read() {
+            Ok(plugins) => plugins,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut all_scripts = Vec::new();
+
+        for plugin in plugins.iter() {
+            all_scripts.extend(plugin.get_external_scripts_with_integrity());
+        }
+
+        all_scripts.sort_by(|a, b| a.0.cmp(&b.0));
+        all_scripts.dedup_by(|a, b| a.0 == b.0);
+        all_scripts
+    }
+
+    /// Get all external CSS URLs with SRI integrity hashes
+    pub fn get_all_external_css_with_integrity(&self) -> Vec<(String, String)> {
+        let plugins = match self.plugins.read() {
+            Ok(plugins) => plugins,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut all_css = Vec::new();
+
+        for plugin in plugins.iter() {
+            all_css.extend(plugin.get_external_css_with_integrity());
+        }
+
+        all_css.sort_by(|a, b| a.0.cmp(&b.0));
+        all_css.dedup_by(|a, b| a.0 == b.0);
+        all_css
+    }
+
     /// Get all external CSS URLs from registered plugins
+    #[allow(dead_code)]
     pub fn get_all_external_css(&self) -> Vec<String> {
         let plugins = match self.plugins.read() {
             Ok(plugins) => plugins,
