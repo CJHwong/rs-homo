@@ -442,8 +442,12 @@ impl WebViewDelegate for LinkOpenerDelegate {
         match name {
             "linkClicked" => {
                 let url = body;
-                info!("Opening external link: {url}");
-                open::that(url).ok();
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    info!("Opening external link: {url}");
+                    open::that(url).ok();
+                } else {
+                    debug!("Blocked non-HTTP URL scheme: {url}");
+                }
             }
             // Receives base64-encoded PNG data from the Mermaid plugin's
             // "Copy Image" button and writes it to NSPasteboard as public.png.

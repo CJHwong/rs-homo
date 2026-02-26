@@ -54,7 +54,7 @@ impl Plugin for MermaidPlugin {
                     <button class="mermaid-copy-btn" onclick="copyMermaidCode(this)" title="Copy Mermaid source">Copy</button>
                     <button class="mermaid-copy-btn" onclick="copyMermaidImage(this)" title="Copy diagram as image">Copy Image</button>
                 </div>
-                <div class="mermaid">{content}</div>
+                <div class="mermaid">{html_escaped_content}</div>
                 <pre class="mermaid-raw" style="display: none;"><code>{html_escaped_content}</code></pre>
             </div>"#
         );
@@ -177,7 +177,11 @@ if (typeof mermaid !== 'undefined') {{
                 if (mc) setTimeout(() => window.cacheMermaidPng(mc), 200);
             }} catch (error) {{
                 console.error('Mermaid rendering error for diagram', index, ':', error);
-                element.innerHTML = '<div style="color: red; padding: 10px; font-family: monospace;">Mermaid rendering error: ' + error.message + '</div>';
+                element.textContent = '';
+                var errDiv = document.createElement('div');
+                errDiv.style.cssText = 'color: red; padding: 10px; font-family: monospace;';
+                errDiv.textContent = 'Mermaid rendering error: ' + error.message;
+                element.appendChild(errDiv);
             }}
         }});
     }};
@@ -368,7 +372,11 @@ window.renderNewMermaidDiagrams = function(container) {{
             if (mc) setTimeout(() => window.cacheMermaidPng(mc), 200);
         }} catch (error) {{
             console.error('Mermaid rendering error for appended content:', error);
-            element.innerHTML = '<div style="color: red; padding: 10px;">Mermaid rendering error: ' + error.message + '</div>';
+            element.textContent = '';
+            var errDiv = document.createElement('div');
+            errDiv.style.cssText = 'color: red; padding: 10px; font-family: monospace;';
+            errDiv.textContent = 'Mermaid rendering error: ' + error.message;
+            element.appendChild(errDiv);
         }}
     }});
 }};

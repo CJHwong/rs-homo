@@ -183,7 +183,11 @@ if (typeof katex !== 'undefined') {{
                 console.log('Successfully rendered LaTeX expression', index);
             }} catch (error) {{
                 console.error('KaTeX rendering error for expression', index, ':', error);
-                element.innerHTML = '<div style="color: ' + window.katexOptions.errorColor + '; padding: 10px; font-family: monospace;">LaTeX rendering error: ' + error.message + '</div>';
+                element.textContent = '';
+                var errDiv = document.createElement('div');
+                errDiv.style.cssText = 'color: ' + window.katexOptions.errorColor + '; padding: 10px; font-family: monospace;';
+                errDiv.textContent = 'LaTeX rendering error: ' + error.message;
+                element.appendChild(errDiv);
             }}
         }});
     }};
@@ -257,7 +261,11 @@ window.renderNewLatexExpressions = function(container) {{
             katex.render(latexCode, element, options);
         }} catch (error) {{
             console.error('KaTeX rendering error for appended content:', error);
-            element.innerHTML = '<div style="color: ' + window.katexOptions.errorColor + '; padding: 10px;">LaTeX rendering error: ' + error.message + '</div>';
+            element.textContent = '';
+            var errDiv = document.createElement('div');
+            errDiv.style.cssText = 'color: ' + window.katexOptions.errorColor + '; padding: 10px; font-family: monospace;';
+            errDiv.textContent = 'LaTeX rendering error: ' + error.message;
+            element.appendChild(errDiv);
         }}
     }});
 }};
