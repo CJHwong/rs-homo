@@ -1,5 +1,6 @@
+use ammonia::Builder;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -7,6 +8,91 @@ use syntect::util::LinesWithEndings;
 
 use crate::gui::types::ThemeMode;
 use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
+
+/// Build an ammonia sanitizer that allows safe structural HTML tags
+/// but strips dangerous elements like <script>, <iframe>, event handlers, etc.
+fn html_sanitizer() -> Builder<'static> {
+    let mut allowed_tags: HashSet<&str> = HashSet::new();
+    // Standard safe inline/block tags
+    for tag in &[
+        "a",
+        "abbr",
+        "acronym",
+        "b",
+        "blockquote",
+        "br",
+        "cite",
+        "code",
+        "dd",
+        "del",
+        "details",
+        "dfn",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "figcaption",
+        "figure",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "i",
+        "img",
+        "ins",
+        "kbd",
+        "li",
+        "mark",
+        "ol",
+        "p",
+        "picture",
+        "pre",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "small",
+        "source",
+        "span",
+        "strong",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "tt",
+        "u",
+        "ul",
+        "var",
+        "wbr",
+    ] {
+        allowed_tags.insert(tag);
+    }
+
+    let mut builder = Builder::new();
+    builder
+        .tags(allowed_tags)
+        .add_tag_attributes("a", &["href", "title"])
+        .add_tag_attributes("img", &["src", "alt", "title", "width", "height"])
+        .add_tag_attributes("td", &["colspan", "rowspan", "align"])
+        .add_tag_attributes("th", &["colspan", "rowspan", "align"])
+        .add_tag_attributes("source", &["src", "type", "media"])
+        .add_tag_attributes("details", &["open"])
+        .url_schemes(HashSet::from(["http", "https", "mailto"]))
+        .link_rel(Some("noopener noreferrer"))
+        .strip_comments(true);
+    builder
+}
 
 const LIGHT_THEME: &str = "InspiredGitHub";
 const DARK_THEME: &str = "base16-ocean.dark";
@@ -179,6 +265,14 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
                 html::push_html(&mut temp, std::iter::once(event));
                 heading_html.push_str(&temp);
             }
+            Event::Html(raw_html) | Event::InlineHtml(raw_html) => {
+                let sanitized = html_sanitizer().clean(&raw_html).to_string();
+                if in_heading {
+                    heading_html.push_str(&sanitized);
+                } else {
+                    html_output.push_str(&sanitized);
+                }
+            }
             e => {
                 if in_heading {
                     let mut temp = String::new();
@@ -312,6 +406,72 @@ mod tests {
         assert!(
             html.contains("id=\"foo-2\""),
             "Third heading should be 'foo-2'"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_script_tag() {
+        let html = parse_markdown("<script>alert('xss')</script>");
+        assert!(
+            !html.contains("<script"),
+            "Script tags must be stripped, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_event_handler() {
+        let html = parse_markdown(r#"<img src=x onerror="alert('xss')">"#);
+        assert!(
+            !html.contains("onerror"),
+            "Event handlers must be stripped, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_iframe() {
+        let html = parse_markdown(r#"<iframe src="https://evil.com"></iframe>"#);
+        assert!(
+            !html.contains("<iframe"),
+            "Iframe tags must be stripped, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_preserves_safe_html() {
+        let html = parse_markdown("<details><summary>Click</summary>\n\nContent\n\n</details>");
+        assert!(
+            html.contains("<details>"),
+            "Details tag must be preserved, got: {html}"
+        );
+        assert!(
+            html.contains("<summary>"),
+            "Summary tag must be preserved, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_preserves_inline_formatting() {
+        let html = parse_markdown("x<sup>2</sup> and H<sub>2</sub>O and <mark>hi</mark>");
+        assert!(
+            html.contains("<sup>"),
+            "Sup tag must be preserved, got: {html}"
+        );
+        assert!(
+            html.contains("<sub>"),
+            "Sub tag must be preserved, got: {html}"
+        );
+        assert!(
+            html.contains("<mark>"),
+            "Mark tag must be preserved, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_javascript_url() {
+        let html = parse_markdown(r#"<a href="javascript:alert(1)">click</a>"#);
+        assert!(
+            !html.contains("javascript:"),
+            "javascript: URLs must be stripped, got: {html}"
         );
     }
 }
