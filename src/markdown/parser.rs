@@ -2,10 +2,12 @@ use ammonia::Builder;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::path::Path;
+use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 use super::image::embed_local_image;
@@ -132,6 +134,38 @@ fn html_sanitizer(base_dir: &Path) -> Builder<'static> {
 const LIGHT_THEME: &str = "InspiredGitHub";
 const DARK_THEME: &str = "base16-ocean.dark";
 
+// Loading these deserializes every bundled grammar and theme, and a fresh
+// set recompiles its regexes on first use. Streaming parses once per chunk,
+// so the sets are loaded once per process.
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+fn theme_for(theme_mode: &ThemeMode) -> &'static Theme {
+    let theme_name = match theme_mode {
+        ThemeMode::Dark => DARK_THEME,
+        ThemeMode::Light | ThemeMode::System | ThemeMode::Paper => LIGHT_THEME,
+    };
+    &THEME_SET.themes[theme_name]
+}
+
+/// Append `code` to `out` as syntax-colored spans.
+fn push_highlighted(out: &mut String, code: &str, syntax: &SyntaxReference, theme: &Theme) {
+    let mut highlighter = HighlightLines::new(syntax, theme);
+    for line in LinesWithEndings::from(code) {
+        let ranges = highlighter.highlight_line(line, &SYNTAX_SET).unwrap();
+        for (style, text) in ranges {
+            let fg = style.foreground;
+            let escaped_text = text.replace('&', "&amp;").replace('<', "&lt;");
+            // Writing into a String cannot fail.
+            let _ = write!(
+                out,
+                "<span style=\"color:#{:02x}{:02x}{:02x}\">{escaped_text}</span>",
+                fg.r, fg.g, fg.b
+            );
+        }
+    }
+}
+
 /// Generate a URL-safe slug from heading text (GitHub-style).
 /// Matches GitHub's algorithm: lowercase, drop everything except
 /// letters/numbers/spaces/hyphens, then replace spaces with hyphens.
@@ -199,18 +233,9 @@ pub fn parse_markdown_with_theme(
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
 
-    let ps = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-
-    // Choose theme based on mode
-    let theme_name = match theme_mode {
-        ThemeMode::Light => LIGHT_THEME,
-        ThemeMode::Dark => DARK_THEME,
-        ThemeMode::System => LIGHT_THEME, // Default to light for system mode
-        ThemeMode::Paper => LIGHT_THEME,
-    };
-
-    let theme = &ts.themes[theme_name];
+    let theme = theme_for(theme_mode);
+    // Built on the first raw HTML event, then reused for the whole document.
+    let mut sanitizer: Option<Builder> = None;
 
     let parser =
         Parser::new_ext(markdown_input, options).map(|event| embed_image_event(event, base_dir));
@@ -295,27 +320,12 @@ pub fn parse_markdown_with_theme(
                     html_output.push_str(&plugin_result.html);
                 } else {
                     // Fallback to standard syntax highlighting
-                    let syntax = ps
+                    let syntax = SYNTAX_SET
                         .find_syntax_by_token(&code_block_language)
-                        .unwrap_or_else(|| ps.find_syntax_by_token("txt").unwrap());
-
-                    let mut h = HighlightLines::new(syntax, theme);
-                    let mut html = String::from("<pre><code>");
-                    for line in LinesWithEndings::from(&code_block_text) {
-                        let ranges = h.highlight_line(line, &ps).unwrap();
-                        let mut line_html = String::new();
-                        for (style, text) in ranges {
-                            let fg = style.foreground;
-                            let color = format!("#{:02x}{:02x}{:02x}", fg.r, fg.g, fg.b);
-                            let escaped_text = text.replace('&', "&amp;").replace('<', "&lt;");
-                            line_html.push_str(&format!(
-                                "<span style=\"color:{color}\">{escaped_text}</span>"
-                            ));
-                        }
-                        html.push_str(&line_html);
-                    }
-                    html.push_str("</code></pre>");
-                    html_output.push_str(&html);
+                        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+                    html_output.push_str("<pre><code>");
+                    push_highlighted(&mut html_output, &code_block_text, syntax, theme);
+                    html_output.push_str("</code></pre>");
                 }
 
                 code_block_text.clear();
@@ -326,29 +336,24 @@ pub fn parse_markdown_with_theme(
                     code_block_text.push_str(&text);
                 } else if in_heading {
                     heading_text.push_str(&text);
-                    let mut temp = String::new();
-                    html::push_html(&mut temp, std::iter::once(Event::Text(text)));
-                    heading_html.push_str(&temp);
+                    html::push_html(&mut heading_html, std::iter::once(Event::Text(text)));
                 } else {
-                    let mut temp_html = String::new();
-                    html::push_html(&mut temp_html, std::iter::once(Event::Text(text)));
-                    html_output.push_str(&temp_html);
+                    html::push_html(&mut html_output, std::iter::once(Event::Text(text)));
                 }
             }
             Event::Code(text) if in_heading => {
                 heading_text.push_str(&text);
-                let mut temp = String::new();
-                html::push_html(&mut temp, std::iter::once(Event::Code(text)));
-                heading_html.push_str(&temp);
+                html::push_html(&mut heading_html, std::iter::once(Event::Code(text)));
             }
             Event::SoftBreak | Event::HardBreak if in_heading => {
                 heading_text.push(' ');
-                let mut temp = String::new();
-                html::push_html(&mut temp, std::iter::once(event));
-                heading_html.push_str(&temp);
+                html::push_html(&mut heading_html, std::iter::once(event));
             }
             Event::Html(raw_html) | Event::InlineHtml(raw_html) => {
-                let sanitized = html_sanitizer(base_dir).clean(&raw_html).to_string();
+                let sanitized = sanitizer
+                    .get_or_insert_with(|| html_sanitizer(base_dir))
+                    .clean(&raw_html)
+                    .to_string();
                 if in_heading {
                     heading_html.push_str(&sanitized);
                 } else {
@@ -356,15 +361,12 @@ pub fn parse_markdown_with_theme(
                 }
             }
             e => {
-                if in_heading {
-                    let mut temp = String::new();
-                    html::push_html(&mut temp, std::iter::once(e));
-                    heading_html.push_str(&temp);
+                let target = if in_heading {
+                    &mut heading_html
                 } else {
-                    let mut temp_html = String::new();
-                    html::push_html(&mut temp_html, std::iter::once(e));
-                    html_output.push_str(&temp_html);
-                }
+                    &mut html_output
+                };
+                html::push_html(target, std::iter::once(e));
             }
         }
     }
@@ -374,37 +376,17 @@ pub fn parse_markdown_with_theme(
 
 /// Highlights markdown syntax and returns it as HTML with theme-aware syntax highlighting.
 pub fn highlight_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -> String {
-    let ps = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-
-    let syntax = ps.find_syntax_by_extension("md").unwrap();
-
-    // Choose theme based on mode
-    let theme_name = match theme_mode {
-        ThemeMode::Light => LIGHT_THEME,
-        ThemeMode::Dark => DARK_THEME,
-        ThemeMode::System => LIGHT_THEME, // Default to light for system mode
-        ThemeMode::Paper => LIGHT_THEME,
-    };
-
-    let theme = &ts.themes[theme_name];
-    let mut h = HighlightLines::new(syntax, theme);
+    let syntax = SYNTAX_SET.find_syntax_by_extension("md").unwrap();
 
     let mut html_output = String::new();
     html_output.push_str("<pre style=\"background-color: var(--pre-bg-color); padding: 16px; border-radius: 6px; overflow: auto; white-space: pre-wrap; word-wrap: break-word;\"><code>");
 
-    for line in LinesWithEndings::from(markdown_input) {
-        let ranges = h.highlight_line(line, &ps).unwrap();
-        for (style, text) in ranges {
-            let fg = style.foreground;
-            let color = format!("#{:02x}{:02x}{:02x}", fg.r, fg.g, fg.b);
-            let escaped_text = text.replace('&', "&amp;").replace('<', "&lt;");
-            html_output.push_str(&format!(
-                "<span style=\"color:{color}\">{escaped_text}</span>"
-            ));
-        }
-    }
-
+    push_highlighted(
+        &mut html_output,
+        markdown_input,
+        syntax,
+        theme_for(theme_mode),
+    );
     html_output.push_str("</code></pre>");
     html_output
 }

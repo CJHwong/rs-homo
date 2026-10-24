@@ -16,6 +16,8 @@ pub enum MenuMessage {
     DecreaseFontSize,
     ResetFontSize,
     SetTheme(ThemeMode),
+    /// Sent by the WebView, not a menu item: an append failed for good.
+    ReloadDocument,
 }
 
 use std::sync::LazyLock;
@@ -38,7 +40,7 @@ pub fn dispatch_menu_message(message: MenuMessage) {
             if let Some(ref sender) = *sender_guard {
                 debug!("Dispatching menu message: {message:?}");
                 match sender.send(message) {
-                    Ok(_) => debug!("Message sent successfully"),
+                    Ok(_) => crate::gui::wake_main_thread(),
                     Err(e) => error!("Failed to send message: {e:?}"),
                 }
             } else {

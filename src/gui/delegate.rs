@@ -6,10 +6,11 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cacao::appkit::window::Window;
 use cacao::appkit::{App, AppDelegate};
@@ -29,13 +30,89 @@ pub struct GuiDelegate {
     current_document: RefCell<Option<DocumentContent>>,
     menu_receiver: RefCell<Option<mpsc::Receiver<MenuMessage>>>,
     is_pipe_mode: bool,
-    pending_content: Arc<Mutex<VecDeque<ContentUpdate>>>,
+    /// Updates with the time they left the streaming thread.
+    pending_content: Arc<Mutex<VecDeque<(Instant, ContentUpdate)>>>,
     style_preferences: RefCell<StylePreferences>,
     last_update_time: RefCell<std::time::Instant>,
     pending_batch: RefCell<Vec<ContentUpdate>>,
     // Rate detection and adaptive processing
     update_timestamps: RefCell<VecDeque<std::time::Instant>>,
     current_rate_category: RefCell<InputRateCategory>,
+}
+
+/// Set while a wake-up is queued on the main thread, so a fast stream
+/// queues one wake-up instead of one per line.
+static WAKE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Set by did_finish_launching. Before that, touching NSApp from another
+/// thread creates the application there, and AppKit later traps in
+/// `_NSAssertMainEventQueueIsCurrentEventQueue`.
+static LAUNCHED: AtomicBool = AtomicBool::new(false);
+
+/// Make AppKit run `did_update` soon. Safe to call from any thread.
+/// Before launch it does nothing; did_finish_launching drains the queue.
+pub(crate) fn wake_main_thread() {
+    if !LAUNCHED.load(Ordering::Acquire) || WAKE_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // SAFETY: performSelectorOnMainThread is designed for cross-thread communication
+    unsafe {
+        use cocoa::appkit::NSApp;
+        use cocoa::base::{NO, id, nil};
+        use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
+        use objc::{msg_send, sel, sel_impl};
+
+        let app: id = NSApp();
+        if app == nil {
+            WAKE_PENDING.store(false, Ordering::Release);
+            return;
+        }
+        let _: () = msg_send![app, performSelectorOnMainThread:sel!(updateWindows) withObject:nil waitUntilDone:NO];
+        CFRunLoopWakeUp(CFRunLoopGetMain());
+    }
+}
+
+/// Run `did_update` again after `delay`, replacing any earlier request.
+/// A batch that waits for its window has no new input to wake it.
+fn schedule_wake_after(delay: Duration) {
+    // SAFETY: called from did_update, which runs on the main thread
+    unsafe {
+        use cocoa::appkit::NSApp;
+        use cocoa::base::{id, nil};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        #[link(name = "Foundation", kind = "framework")]
+        unsafe extern "C" {
+            static NSRunLoopCommonModes: id;
+        }
+
+        let app: id = NSApp();
+        if app == nil {
+            return;
+        }
+        let _: () = msg_send![class!(NSObject), cancelPreviousPerformRequestsWithTarget:app selector:sel!(updateWindows) object:nil];
+        // Common modes, so the wake also fires during a window resize.
+        let modes: id = msg_send![class!(NSArray), arrayWithObject:NSRunLoopCommonModes];
+        let _: () = msg_send![app, performSelector:sel!(updateWindows) withObject:nil afterDelay:delay.as_secs_f64() inModes:modes];
+    }
+}
+
+/// Classify the input rate from arrival times, oldest first.
+fn classify_rate(arrivals: &VecDeque<Instant>) -> Option<InputRateCategory> {
+    if arrivals.len() < 3 {
+        return None;
+    }
+    let span = arrivals.back()?.duration_since(*arrivals.front()?);
+    let avg_interval = span / (arrivals.len() as u32 - 1);
+    Some(if avg_interval > Duration::from_millis(100) {
+        InputRateCategory::Slow
+    } else if avg_interval > Duration::from_millis(10) {
+        InputRateCategory::Medium
+    } else if avg_interval > Duration::from_millis(1) {
+        InputRateCategory::Fast
+    } else {
+        InputRateCategory::Extreme
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,15 +133,18 @@ impl GuiDelegate {
         // Create shared state for pending content queue
         let pending_content = Arc::new(Mutex::new(VecDeque::new()));
 
-        // Start background thread to continuously poll original receiver
+        // Forward streamed updates to the main thread. The arrival time is
+        // stamped here: did_update drains several queued updates at once, so
+        // a time taken there measures the drain, not the input.
         if let Some(orig_receiver) = receiver {
             let pending_content_clone = pending_content.clone();
             thread::spawn(move || {
                 while let Ok(content_update) = orig_receiver.recv() {
                     if let Ok(mut pending) = pending_content_clone.lock() {
-                        pending.push_back(content_update);
+                        pending.push_back((Instant::now(), content_update));
                         debug!("Queued content update, queue size: {}", pending.len());
                     }
+                    wake_main_thread();
                 }
             });
         }
@@ -100,7 +180,18 @@ impl GuiDelegate {
     /// Handles the toggle mode action
     pub fn toggle_mode(&self) {
         let style_preferences = self.style_preferences.borrow().clone();
-        self.view.toggle_mode(&style_preferences);
+        if let Some(document) = self.current_document.borrow().as_ref() {
+            self.view.toggle_mode(document, &style_preferences);
+        }
+    }
+
+    /// Reload the page from the document after the WebView dropped a chunk.
+    fn reload_document(&self) {
+        if let Some(document) = self.current_document.borrow().as_ref() {
+            info!("Reloading document after a failed append");
+            self.view
+                .update_content_with_scroll(document, ScrollBehavior::Preserve);
+        }
     }
 
     /// Handles font family change
@@ -150,49 +241,33 @@ impl GuiDelegate {
         }
     }
 
-    /// Detect input rate and update processing strategy
-    fn detect_and_update_rate_category(&self) {
-        let now = std::time::Instant::now();
+    /// Record one arrival and update the processing strategy
+    fn detect_and_update_rate_category(&self, arrival: Instant) {
         let mut timestamps = self.update_timestamps.borrow_mut();
-
-        // Add current timestamp
-        timestamps.push_back(now);
+        timestamps.push_back(arrival);
 
         // Keep only recent timestamps (last 10 updates or 2 seconds)
         while timestamps.len() > 10 {
             timestamps.pop_front();
         }
         while let Some(&front) = timestamps.front() {
-            if now.duration_since(front) > Duration::from_secs(2) {
+            if arrival.duration_since(front) > Duration::from_secs(2) {
                 timestamps.pop_front();
             } else {
                 break;
             }
         }
 
-        // Calculate average interval if we have enough samples
-        if timestamps.len() >= 3 {
-            let total_duration = now.duration_since(*timestamps.front().unwrap());
-            let avg_interval = total_duration / (timestamps.len() as u32 - 1);
-
-            let new_category = if avg_interval > Duration::from_millis(100) {
-                InputRateCategory::Slow
-            } else if avg_interval > Duration::from_millis(10) {
-                InputRateCategory::Medium
-            } else if avg_interval > Duration::from_millis(1) {
-                InputRateCategory::Fast
-            } else {
-                InputRateCategory::Extreme
-            };
-
-            let mut current_category = self.current_rate_category.borrow_mut();
-            if *current_category != new_category {
-                debug!(
-                    "Input rate changed from {:?} to {:?} (avg interval: {:?})",
-                    *current_category, new_category, avg_interval
-                );
-                *current_category = new_category;
-            }
+        let Some(new_category) = classify_rate(&timestamps) else {
+            return;
+        };
+        let mut current_category = self.current_rate_category.borrow_mut();
+        if *current_category != new_category {
+            debug!(
+                "Input rate changed from {:?} to {:?}",
+                *current_category, new_category
+            );
+            *current_category = new_category;
         }
     }
 
@@ -205,46 +280,22 @@ impl GuiDelegate {
             InputRateCategory::Extreme => Duration::from_millis(1000), // Very aggressive batching
         }
     }
-
-    /// Set up background polling that properly dispatches to main thread  
-    fn start_background_polling(&self) {
-        thread::spawn(|| {
-            loop {
-                thread::sleep(Duration::from_millis(100));
-
-                // Use performSelectorOnMainThread to safely call updateWindows from background thread
-                // SAFETY: performSelectorOnMainThread is designed for cross-thread communication
-                unsafe {
-                    use cocoa::appkit::NSApp;
-                    use cocoa::base::{NO, id, nil};
-                    use core_foundation::runloop::{CFRunLoopGetMain, CFRunLoopWakeUp};
-                    use objc::{msg_send, sel, sel_impl};
-
-                    let app: id = NSApp();
-                    if app != nil {
-                        // Use performSelectorOnMainThread to safely execute on main thread
-                        let _: () = msg_send![app,  performSelectorOnMainThread:sel!(updateWindows) withObject:nil waitUntilDone:NO];
-                    }
-
-                    // Also wake up the main run loop
-                    let main_loop = CFRunLoopGetMain();
-                    CFRunLoopWakeUp(main_loop);
-                }
-            }
-        });
-    }
 }
 
 impl AppDelegate for GuiDelegate {
     /// Called when the application finishes launching.
     fn did_finish_launching(&self) {
-        // Menu setup is now handled when the first window is created
-        // Set up background polling to ensure updates continue when window is not focused
-        self.start_background_polling();
+        // Menu setup is handled when the first window is created. Updates
+        // that arrived before launch finished are waiting in the queue.
+        LAUNCHED.store(true, Ordering::Release);
+        wake_main_thread();
     }
 
     /// Called when forced by background thread - handles all updates
     fn did_update(&self) {
+        // Clear first: a wake requested from here on runs did_update again.
+        WAKE_PENDING.store(false, Ordering::Release);
+
         // Handle menu messages
         if let Some(menu_receiver) = self.menu_receiver.borrow().as_ref() {
             while let Ok(menu_message) = menu_receiver.try_recv() {
@@ -274,6 +325,9 @@ impl AppDelegate for GuiDelegate {
                     MenuMessage::SetTheme(theme) => {
                         self.set_theme(theme);
                     }
+                    MenuMessage::ReloadDocument => {
+                        self.reload_document();
+                    }
                 }
             }
         }
@@ -288,11 +342,10 @@ impl AppDelegate for GuiDelegate {
         let mut has_new_updates = false;
 
         while let Ok(mut pending) = self.pending_content.lock() {
-            if let Some(content_update) = pending.pop_front() {
+            if let Some((arrival, content_update)) = pending.pop_front() {
                 updates_to_process.push(content_update);
                 has_new_updates = true;
-                // Detect input rate when we get new updates
-                self.detect_and_update_rate_category();
+                self.detect_and_update_rate_category(arrival);
 
                 // Limit batch size based on rate category
                 let max_batch_size = match *self.current_rate_category.borrow() {
@@ -354,6 +407,8 @@ impl AppDelegate for GuiDelegate {
             }
 
             *last_update = now;
+        } else if !self.pending_batch.borrow().is_empty() {
+            schedule_wake_after(processing_window.saturating_sub(time_since_last_update));
         }
     }
 
@@ -413,8 +468,11 @@ impl GuiDelegate {
 
     /// Process updates aggressively for fast/extreme input rates
     fn process_updates_aggressively(&self, batched_updates: Vec<ContentUpdate>) {
-        // For high-speed input, skip incremental appends and do full rebuilds
+        // For high-speed input, skip incremental appends and do full reloads.
+        // Each chunk was parsed on the streaming thread already, so the page
+        // is the chunks' HTML joined; nothing is parsed again here.
         let mut final_markdown = String::new();
+        let mut final_html = String::new();
         let mut found_full_replace = false;
         let mut base_content: Option<DocumentContent> = None;
 
@@ -425,9 +483,11 @@ impl GuiDelegate {
                     base_content = Some(content);
                     found_full_replace = true;
                     final_markdown.clear(); // Reset on full replace
+                    final_html.clear();
                 }
-                ContentUpdate::Append { markdown, .. } => {
+                ContentUpdate::Append { markdown, html } => {
                     final_markdown.push_str(&markdown);
+                    final_html.push_str(&html);
                 }
             }
         }
@@ -436,7 +496,7 @@ impl GuiDelegate {
             // We have a base document, append all accumulated content
             if let Some(mut content) = base_content {
                 content.markdown.push_str(&final_markdown);
-                content.regenerate_html();
+                content.html.push_str(&final_html);
 
                 debug!(
                     "Aggressive processing: full reload with {} total chars",
@@ -448,7 +508,7 @@ impl GuiDelegate {
             // Only appends, update the current document directly
             if let Some(ref mut current_doc) = *self.current_document.borrow_mut() {
                 current_doc.markdown.push_str(&final_markdown);
-                current_doc.regenerate_html();
+                current_doc.html.push_str(&final_html);
 
                 // Force a full reload instead of incremental append for extreme speeds
                 debug!("Aggressive processing: forced full reload with accumulated content");
@@ -489,35 +549,18 @@ impl GuiDelegate {
             ContentUpdate::Append { markdown, html } => {
                 // Only append if we have a window
                 if self.window.borrow().is_some() {
-                    let style_preferences = self.style_preferences.borrow().clone();
-
-                    // Update the current document with the new content
+                    // The document keeps the page's HTML in step with the DOM:
+                    // the chunk HTML is what the WebView shows, so re-parsing
+                    // the whole document per chunk would only burn CPU.
                     if let Some(ref mut current_doc) = *self.current_document.borrow_mut() {
-                        debug!(
-                            "Before append - current doc markdown length: {}",
-                            current_doc.markdown.len()
-                        );
                         current_doc.markdown.push_str(&markdown);
+                        current_doc.html.push_str(&html);
+                        self.view.append_content(&html);
                         debug!(
-                            "After append - current doc markdown length: {}",
+                            "Content appended (chunk: {} bytes, document: {} bytes)",
+                            markdown.len(),
                             current_doc.markdown.len()
                         );
-                        debug!(
-                            "First 200 chars of accumulated markdown: {:?}",
-                            current_doc.markdown.chars().take(200).collect::<String>()
-                        );
-
-                        // Regenerate HTML to ensure consistency with accumulated content
-                        current_doc.regenerate_html();
-                        debug!(
-                            "After regenerate - current doc HTML length: {}",
-                            current_doc.html.len()
-                        );
-
-                        // Try to append the individual chunk first
-                        self.view
-                            .append_content(&markdown, &html, &style_preferences);
-                        debug!("Content appended (chunk: {} bytes)", markdown.len());
                     }
                 }
             }
@@ -529,6 +572,39 @@ impl GuiDelegate {
             self.setup_menu();
             let window = create_main_window(&self.view);
             *self.window.borrow_mut() = Some(window);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn arrivals(gap: Duration, count: u32) -> VecDeque<Instant> {
+        let start = Instant::now();
+        (0..count).map(|index| start + gap * index).collect()
+    }
+
+    #[test]
+    fn test_classify_rate_needs_three_samples() {
+        assert_eq!(classify_rate(&arrivals(Duration::from_millis(1), 2)), None);
+    }
+
+    #[test]
+    fn test_classify_rate_uses_arrival_gaps() {
+        let cases = [
+            (Duration::from_millis(200), InputRateCategory::Slow),
+            (Duration::from_millis(50), InputRateCategory::Medium),
+            (Duration::from_millis(5), InputRateCategory::Fast),
+            (Duration::from_micros(100), InputRateCategory::Extreme),
+        ];
+        for (gap, expected) in cases {
+            assert_eq!(
+                classify_rate(&arrivals(gap, 5)),
+                Some(expected),
+                "gap {gap:?}"
+            );
         }
     }
 }

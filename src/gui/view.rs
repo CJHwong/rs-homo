@@ -303,6 +303,8 @@ const LINK_INTERCEPTOR_JS: &str = r#"
                     setTimeout(window.processNextAppend, 50 * (retryCount + 1));
                 } else {
                     console.error('Max retries exceeded, skipping content:', htmlContent.substring(0, 100));
+                    // The DOM is now missing a chunk; ask the app for a full reload.
+                    window.webkit.messageHandlers.appendFailed.postMessage('');
                     setTimeout(window.processNextAppend, 10);
                 }
             }
@@ -497,6 +499,10 @@ impl WebViewDelegate for LinkOpenerDelegate {
                     }
                 }
             }
+            "appendFailed" => {
+                info!("WebView dropped a chunk; requesting a full reload");
+                crate::menu::dispatch_menu_message(crate::menu::MenuMessage::ReloadDocument);
+            }
             "scrollRatio" => {
                 if let Ok(ratio) = body.parse::<f64>() {
                     set_scroll_ratio(ratio);
@@ -513,9 +519,6 @@ impl WebViewDelegate for LinkOpenerDelegate {
 pub struct MarkdownView {
     pub webview: WebView<LinkOpenerDelegate>,
     current_mode: std::cell::RefCell<ViewMode>,
-    accumulated_content: std::cell::RefCell<String>, // HTML content
-    accumulated_markdown: std::cell::RefCell<String>, // Original markdown content
-    last_sync_time: std::cell::RefCell<std::time::Instant>,
 }
 
 impl MarkdownView {
@@ -525,30 +528,30 @@ impl MarkdownView {
     #[allow(deprecated)]
     #[allow(unexpected_cfgs)]
     pub fn evaluate_javascript(&self, script: &str) {
-        // Safely truncate very long scripts for logging (respecting Unicode boundaries)
-        let script_preview = if script.len() > 200 {
-            format!(
-                "{}...(truncated {} chars)",
-                safe_truncate(script, 200),
-                script.len()
-            )
-        } else {
-            script.to_string()
-        };
-
         self.webview.objc.with_mut(|obj| unsafe {
             use cocoa::base::nil;
             use cocoa::foundation::NSString;
             use objc::{msg_send, sel, sel_impl};
 
-            // Convert the script to NSString
+            // alloc/init returns a +1 reference; WKWebView keeps its own copy.
             let ns_script = NSString::alloc(nil).init_str(script);
-
-            // Call evaluateJavaScript:completionHandler: on the WKWebView
             let _: () = msg_send![obj, evaluateJavaScript:ns_script completionHandler:nil];
-
-            debug!("Executed JavaScript: {script_preview}");
+            let _: () = msg_send![ns_script, release];
         });
+
+        if log::log_enabled!(log::Level::Debug) {
+            // Truncate very long scripts for logging (respecting Unicode boundaries)
+            let suffix = if script.len() > 200 {
+                "...(truncated)"
+            } else {
+                ""
+            };
+            debug!(
+                "Executed JavaScript ({} bytes): {}{suffix}",
+                script.len(),
+                safe_truncate(script, 200)
+            );
+        }
     }
 
     pub fn new() -> Self {
@@ -557,6 +560,7 @@ impl MarkdownView {
         config.add_handler("copyImage");
         config.add_handler("appendHTML");
         config.add_handler("scrollRatio");
+        config.add_handler("appendFailed");
 
         // CORRECTED: Use the correct enum variant `InjectAt::Start`.
         config.add_user_script(LINK_INTERCEPTOR_JS, InjectAt::Start, false);
@@ -567,91 +571,37 @@ impl MarkdownView {
         MarkdownView {
             webview,
             current_mode: std::cell::RefCell::new(ViewMode::Preview),
-            accumulated_content: std::cell::RefCell::new(String::new()),
-            accumulated_markdown: std::cell::RefCell::new(String::new()),
-            last_sync_time: std::cell::RefCell::new(std::time::Instant::now()),
         }
     }
 
-    pub fn append_content(
-        &self,
-        markdown_chunk: &str,
-        html_chunk: &str,
-        _style_preferences: &crate::gui::types::StylePreferences,
-    ) {
-        // Accumulate both markdown and HTML content
-        self.accumulated_content.borrow_mut().push_str(html_chunk);
-        self.accumulated_markdown
-            .borrow_mut()
-            .push_str(markdown_chunk);
-
-        // Check if we need to do a periodic sync to ensure content integrity
-        let now = std::time::Instant::now();
-        let mut last_sync = self.last_sync_time.borrow_mut();
-        let should_sync = now.duration_since(*last_sync) >= std::time::Duration::from_secs(5);
-
-        // Only append to DOM if we're in preview mode
-        if *self.current_mode.borrow() == ViewMode::Preview {
-            if should_sync {
-                // Periodic full refresh to ensure integrity
-                debug!("Performing periodic content sync to ensure integrity");
-                let full_content = self.accumulated_content.borrow().clone();
-                let sync_script = format!(
-                    r#"
-                    try {{
-                        // Clear and rebuild content to ensure integrity
-                        document.body.innerHTML = {};
-                        console.log('Periodic sync completed, content length:', document.body.innerHTML.length);
-                        
-                        // Re-initialize scroll button and plugins
-                        if (typeof window.createScrollToBottomButton === 'function') {{
-                            window.createScrollToBottomButton();
-                            window.addEventListener('scroll', window.handleScroll);
-                        }}
-                        
-                        if (typeof window.renderMermaidDiagrams === 'function') {{
-                            window.renderMermaidDiagrams();
-                        }}
-                        if (typeof window.renderLatexExpressions === 'function') {{
-                            window.renderLatexExpressions();
-                        }}
-                    }} catch(e) {{
-                        console.error('Sync error:', e);
-                    }}
-                    "#,
-                    serde_json::to_string(&full_content)
-                        .unwrap_or_else(|_| "\"Sync error\"".to_string())
-                );
-                self.evaluate_javascript(&sync_script);
-                *last_sync = now;
-            } else {
-                // Normal incremental append
-                let json_escaped_html = serde_json::to_string(html_chunk)
-                    .unwrap_or_else(|_| "\"Error: Could not escape HTML content\"".to_string());
-
-                // Simplified append script that uses the queue system
-                let append_script = format!(
-                    r#"
-                    try {{
-                        if (typeof window.appendContent === 'function') {{
-                            window.appendContent({json_escaped_html});
-                        }} else {{
-                            console.error('appendContent function not available');
-                        }}
-                    }} catch(e) {{
-                        console.error('JavaScript append error:', e);
-                    }}
-                    "#
-                );
-
-                debug!(
-                    "Queuing content append with {} characters of HTML",
-                    html_chunk.len()
-                );
-                self.evaluate_javascript(&append_script);
-            }
+    /// Append one parsed chunk to the page. The caller keeps the document;
+    /// source mode shows nothing new until the next toggle rebuilds it.
+    pub fn append_content(&self, html_chunk: &str) {
+        if *self.current_mode.borrow() != ViewMode::Preview {
+            return;
         }
-        // If we're in source mode, we'll regenerate the full content when toggling
+        let json_escaped_html = serde_json::to_string(html_chunk)
+            .unwrap_or_else(|_| "\"Error: Could not escape HTML content\"".to_string());
+
+        let append_script = format!(
+            r#"
+            try {{
+                if (typeof window.appendContent === 'function') {{
+                    window.appendContent({json_escaped_html});
+                }} else {{
+                    console.error('appendContent function not available');
+                }}
+            }} catch(e) {{
+                console.error('JavaScript append error:', e);
+            }}
+            "#
+        );
+
+        debug!(
+            "Queuing content append with {} characters of HTML",
+            html_chunk.len()
+        );
+        self.evaluate_javascript(&append_script);
     }
 
     pub fn update_content_with_scroll(
@@ -659,9 +609,6 @@ impl MarkdownView {
         document_content: &DocumentContent,
         scroll_behavior: ScrollBehavior,
     ) {
-        // Set accumulated content to match the new content (for streaming mode)
-        *self.accumulated_content.borrow_mut() = document_content.html.clone();
-        *self.accumulated_markdown.borrow_mut() = document_content.markdown.clone();
         *self.current_mode.borrow_mut() = document_content.mode.clone();
 
         let content = match document_content.mode {
@@ -754,7 +701,11 @@ setTimeout(function() {{
         self.evaluate_javascript("window.selectAllText()");
     }
 
-    pub fn toggle_mode(&self, style_preferences: &crate::gui::types::StylePreferences) {
+    pub fn toggle_mode(
+        &self,
+        document: &DocumentContent,
+        style_preferences: &crate::gui::types::StylePreferences,
+    ) {
         // Toggle the current mode
         let new_mode = match *self.current_mode.borrow() {
             ViewMode::Preview => ViewMode::Source,
@@ -762,19 +713,12 @@ setTimeout(function() {{
         };
         *self.current_mode.borrow_mut() = new_mode.clone();
 
-        // Regenerate content based on new mode using accumulated data
         let content = match new_mode {
-            ViewMode::Preview => {
-                // Use accumulated HTML content
-                self.accumulated_content.borrow().clone()
-            }
-            ViewMode::Source => {
-                // Generate highlighted markdown from accumulated markdown
-                markdown::highlight_markdown_with_theme(
-                    &self.accumulated_markdown.borrow(),
-                    &style_preferences.theme,
-                )
-            }
+            ViewMode::Preview => document.html.clone(),
+            ViewMode::Source => markdown::highlight_markdown_with_theme(
+                &document.markdown,
+                &style_preferences.theme,
+            ),
         };
 
         // Do a full reload for mode toggle (this is acceptable since it's user-initiated)
@@ -793,7 +737,7 @@ setTimeout(function() {{
         };
 
         let scripts = generate_scripts_html(&DocumentContent {
-            markdown: self.accumulated_markdown.borrow().clone(),
+            markdown: document.markdown.clone(),
             html: content.clone(),
             mode: new_mode.clone(),
             title: "Toggle Mode".to_string(),

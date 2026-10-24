@@ -11,6 +11,7 @@ mod view;
 mod window;
 
 pub use delegate::GuiDelegate;
+pub(crate) use delegate::wake_main_thread;
 
 /// Runs the GUI application, optionally with a receiver for streamed ContentUpdate.
 pub fn run_app(receiver: Option<mpsc::Receiver<ContentUpdate>>, is_pipe_mode: bool) {
