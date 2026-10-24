@@ -23,7 +23,6 @@ pub struct DocumentContent {
     pub mode: ViewMode,
     #[allow(dead_code)]
     pub title: String,
-    #[allow(dead_code)]
     pub file_path: Option<String>,
     pub style_preferences: StylePreferences,
 }
@@ -42,7 +41,10 @@ impl DocumentContent {
 
     /// Regenerates the HTML content with the current theme
     pub fn regenerate_html(&mut self) {
-        self.html =
-            markdown::parse_markdown_with_theme(&self.markdown, &self.style_preferences.theme);
+        self.html = markdown::parse_markdown_with_theme(
+            &self.markdown,
+            &self.style_preferences.theme,
+            &markdown::base_dir_for(self.file_path.as_deref()),
+        );
     }
 }

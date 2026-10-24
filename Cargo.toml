@@ -29,6 +29,7 @@ log = "0.4"
 env_logger = "0.11"
 lazy_static = "1.4"
 ammonia = "4.1.2"
+base64 = "0.22"
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }

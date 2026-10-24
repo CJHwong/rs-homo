@@ -1,17 +1,48 @@
 use ammonia::Builder;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
+use super::image::embed_local_image;
 use crate::gui::types::ThemeMode;
 use crate::plugins::{PluginContext, manager::PLUGIN_MANAGER};
 
+fn is_data_url(value: &str) -> bool {
+    value
+        .trim_start()
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+}
+
+/// Embed local `<img src>` files, and keep `data:` URLs only where they
+/// are an image. A `data:text/html` link is a script vector; an image is not.
+fn filter_url_attribute<'u>(
+    element: &str,
+    attribute: &str,
+    value: &'u str,
+    base_dir: &Path,
+) -> Option<Cow<'u, str>> {
+    let is_img_src = element == "img" && attribute == "src";
+    if is_img_src {
+        if is_data_url(value) && !value.trim_start()[5..].starts_with("image/") {
+            return None;
+        }
+        return Some(embed_local_image(value, base_dir).map_or(Cow::Borrowed(value), Cow::Owned));
+    }
+    if (attribute == "href" || attribute == "src") && is_data_url(value) {
+        return None;
+    }
+    Some(Cow::Borrowed(value))
+}
+
 /// Build an ammonia sanitizer that allows safe structural HTML tags
 /// but strips dangerous elements like <script>, <iframe>, event handlers, etc.
-fn html_sanitizer() -> Builder<'static> {
+fn html_sanitizer(base_dir: &Path) -> Builder<'static> {
     let mut allowed_tags: HashSet<&str> = HashSet::new();
     // Standard safe inline/block tags
     for tag in &[
@@ -88,9 +119,13 @@ fn html_sanitizer() -> Builder<'static> {
         .add_tag_attributes("th", &["colspan", "rowspan", "align"])
         .add_tag_attributes("source", &["src", "type", "media"])
         .add_tag_attributes("details", &["open"])
-        .url_schemes(HashSet::from(["http", "https", "mailto"]))
+        .url_schemes(HashSet::from(["http", "https", "mailto", "data"]))
         .link_rel(Some("noopener noreferrer"))
         .strip_comments(true);
+    let base_dir = base_dir.to_path_buf();
+    builder.attribute_filter(move |element, attribute, value| {
+        filter_url_attribute(element, attribute, value, &base_dir)
+    });
     builder
 }
 
@@ -128,11 +163,36 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 ///
 /// Enables GitHub-style extensions like tables, footnotes, strikethrough, and task lists.
 pub fn parse_markdown(markdown_input: &str) -> String {
-    parse_markdown_with_theme(markdown_input, &ThemeMode::System)
+    parse_markdown_with_theme(markdown_input, &ThemeMode::System, Path::new("."))
+}
+
+/// Rewrite a markdown image to point at its embedded bytes, if it is local.
+fn embed_image_event<'e>(event: Event<'e>, base_dir: &Path) -> Event<'e> {
+    let Event::Start(Tag::Image {
+        link_type,
+        dest_url,
+        title,
+        id,
+    }) = event
+    else {
+        return event;
+    };
+    let dest_url = embed_local_image(&dest_url, base_dir).map_or(dest_url, Into::into);
+    Event::Start(Tag::Image {
+        link_type,
+        dest_url,
+        title,
+        id,
+    })
 }
 
 /// Parses a string of Markdown text and converts it into an HTML string with theme-aware syntax highlighting.
-pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -> String {
+/// `base_dir` is where relative image paths resolve; see `base_dir_for`.
+pub fn parse_markdown_with_theme(
+    markdown_input: &str,
+    theme_mode: &ThemeMode,
+    base_dir: &Path,
+) -> String {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -152,7 +212,8 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
 
     let theme = &ts.themes[theme_name];
 
-    let parser = Parser::new_ext(markdown_input, options);
+    let parser =
+        Parser::new_ext(markdown_input, options).map(|event| embed_image_event(event, base_dir));
     let mut html_output = String::new();
     let mut code_block_text = String::new();
     let mut code_block_language = String::new();
@@ -165,8 +226,29 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
     let mut heading_html = String::new(); // inner HTML content
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
 
+    // pulldown-cmark writes the alt attribute from the text events between
+    // Start(Image) and End(Image). Fed one event at a time it loses that
+    // state, so an image is buffered and rendered in one call.
+    let mut image_events: Option<Vec<Event>> = None;
+
     for event in parser {
+        if let Some(events) = image_events.as_mut() {
+            let is_end = matches!(event, Event::End(TagEnd::Image));
+            events.push(event);
+            if is_end {
+                let target = if in_heading {
+                    &mut heading_html
+                } else {
+                    &mut html_output
+                };
+                html::push_html(target, image_events.take().into_iter().flatten());
+            }
+            continue;
+        }
         match event {
+            Event::Start(Tag::Image { .. }) => {
+                image_events = Some(vec![event]);
+            }
             Event::Start(Tag::Heading { level, .. }) => {
                 in_heading = true;
                 heading_level = level;
@@ -266,7 +348,7 @@ pub fn parse_markdown_with_theme(markdown_input: &str, theme_mode: &ThemeMode) -
                 heading_html.push_str(&temp);
             }
             Event::Html(raw_html) | Event::InlineHtml(raw_html) => {
-                let sanitized = html_sanitizer().clean(&raw_html).to_string();
+                let sanitized = html_sanitizer(base_dir).clean(&raw_html).to_string();
                 if in_heading {
                     heading_html.push_str(&sanitized);
                 } else {
@@ -472,6 +554,92 @@ mod tests {
         assert!(
             !html.contains("javascript:"),
             "javascript: URLs must be stripped, got: {html}"
+        );
+    }
+
+    /// A fixture directory holding one tiny PNG; unique per test so tests
+    /// run in parallel without clobbering each other.
+    fn image_fixture(test_name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("homo_{test_name}_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("img")).unwrap();
+        std::fs::write(dir.join("img/dot.png"), b"\x89PNG").unwrap();
+        dir
+    }
+
+    fn render_in(markdown: &str, dir: &std::path::Path) -> String {
+        parse_markdown_with_theme(markdown, &ThemeMode::Light, dir)
+    }
+
+    #[test]
+    fn test_markdown_image_relative_path_is_embedded() {
+        let dir = image_fixture("md_relative");
+        let html = render_in("![dot](img/dot.png)", &dir);
+        assert!(
+            html.contains(r#"src="data:image/png;base64,iVBORw==""#),
+            "Relative image must be embedded, got: {html}"
+        );
+        assert!(
+            html.contains(r#"alt="dot""#),
+            "Alt text must stay, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_image_absolute_path_is_embedded() {
+        let dir = image_fixture("md_absolute");
+        let absolute = dir.join("img/dot.png");
+        let html = render_in(&format!("![dot]({})", absolute.display()), Path::new("/"));
+        assert!(
+            html.contains("data:image/png;base64,"),
+            "Absolute image must be embedded, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_image_missing_file_keeps_src_and_alt() {
+        let dir = image_fixture("md_missing");
+        let html = render_in("![gone](img/nope.png)", &dir);
+        assert!(html.contains(r#"src="img/nope.png""#), "got: {html}");
+        assert!(html.contains(r#"alt="gone""#), "got: {html}");
+    }
+
+    #[test]
+    fn test_markdown_image_remote_url_passes_through() {
+        let html = render_in("![r](https://example.com/a.png)", Path::new("."));
+        assert!(
+            html.contains(r#"src="https://example.com/a.png""#),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_raw_html_image_relative_path_is_embedded() {
+        let dir = image_fixture("raw_relative");
+        let html = render_in(r#"<img src="img/dot.png" width="10">"#, &dir);
+        assert!(
+            html.contains("data:image/png;base64,iVBORw=="),
+            "Raw <img> must be embedded, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_raw_html_image_data_uri_is_kept() {
+        let html = render_in(r#"<img src="data:image/png;base64,AAAA">"#, Path::new("."));
+        assert!(
+            html.contains(r#"src="data:image/png;base64,AAAA""#),
+            "Pasted data: image must survive sanitizing, got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_strips_data_url_outside_img() {
+        let html = render_in(
+            r#"<a href="data:text/html,<script>alert(1)</script>">x</a><img src="data:text/html,x">"#,
+            Path::new("."),
+        );
+        assert!(
+            !html.contains("data:"),
+            "data: must only survive as an image, got: {html}"
         );
     }
 }

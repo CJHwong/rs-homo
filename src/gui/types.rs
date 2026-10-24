@@ -380,6 +380,9 @@ table tbody tr:hover {{
     max-width: 100%;
     height: auto;
 }}
+img {{
+    max-width: 100%;
+}}
 /* Ensure mermaid diagrams are visible in both themes */
 .mermaid .node rect,
 .mermaid .node circle,

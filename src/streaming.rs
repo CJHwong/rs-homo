@@ -2,6 +2,7 @@
 
 use crate::content::{ContentUpdate, DocumentContent};
 use crate::error::AppError;
+use crate::gui::types::ThemeMode;
 use crate::markdown;
 use log::{debug, error, info};
 use std::fs::File;
@@ -209,7 +210,11 @@ pub fn read_from_file(sender: mpsc::Sender<ContentUpdate>, filename: &str) -> Re
     debug!("Read {buffer_len} bytes from file");
 
     debug!("Parsing markdown");
-    let html_content = markdown::parse_markdown(&buffer);
+    let html_content = markdown::parse_markdown_with_theme(
+        &buffer,
+        &ThemeMode::System,
+        &markdown::base_dir_for(Some(filename)),
+    );
     let title = std::path::Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())

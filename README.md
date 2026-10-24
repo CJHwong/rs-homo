@@ -16,6 +16,7 @@ A fast, native macOS Markdown viewer with streaming support. Pipe Markdown to it
 - **GitHub-flavored Markdown**: Tables, footnotes, strikethrough, task lists
 - **Mermaid diagram support**: Interactive flowcharts, sequence diagrams, and more
 - **LaTeX/Math rendering**: KaTeX support for mathematical expressions
+- **Inline images**: Local paths (relative to the file, or to the working directory for piped input), remote URLs, and `data:` images
 - **External link handling**: Opens links in your browser
 - **Customizable appearance**: Font family, size, and theme preferences
 
