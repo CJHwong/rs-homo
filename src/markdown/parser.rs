@@ -200,6 +200,16 @@ pub fn parse_markdown(markdown_input: &str) -> String {
     parse_markdown_with_theme(markdown_input, &ThemeMode::System, Path::new("."))
 }
 
+/// Whether `event` can appear in a paragraph that holds only images:
+/// the images themselves and the whitespace between them.
+fn is_image_row_event(event: &Event) -> bool {
+    match event {
+        Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Paragraph) | Event::SoftBreak => true,
+        Event::Text(text) => text.trim().is_empty(),
+        _ => false,
+    }
+}
+
 /// Rewrite a markdown image to point at its embedded bytes, if it is local.
 fn embed_image_event<'e>(event: Event<'e>, base_dir: &Path) -> Event<'e> {
     let Event::Start(Tag::Image {
@@ -256,6 +266,11 @@ pub fn parse_markdown_with_theme(
     // state, so an image is buffered and rendered in one call.
     let mut image_events: Option<Vec<Event>> = None;
 
+    // The open paragraph's start in html_output, and whether it holds only
+    // images so far. CSS cannot see text nodes, so the parser marks
+    // image-only paragraphs for centering.
+    let mut paragraph: Option<(usize, bool)> = None;
+
     for event in parser {
         if let Some(events) = image_events.as_mut() {
             let is_end = matches!(event, Event::End(TagEnd::Image));
@@ -270,9 +285,26 @@ pub fn parse_markdown_with_theme(
             }
             continue;
         }
+        if let Some((_, only_images)) = paragraph.as_mut() {
+            *only_images &= is_image_row_event(&event);
+        }
         match event {
             Event::Start(Tag::Image { .. }) => {
                 image_events = Some(vec![event]);
+            }
+            Event::Start(Tag::Paragraph) if !in_heading => {
+                paragraph = Some((html_output.len(), true));
+                html::push_html(&mut html_output, std::iter::once(event));
+            }
+            Event::End(TagEnd::Paragraph) if !in_heading => {
+                html::push_html(&mut html_output, std::iter::once(event));
+                let image_only_start = match paragraph.take() {
+                    Some((start, true)) => html_output[start..].find("<p>").map(|at| start + at),
+                    _ => None,
+                };
+                if let Some(at) = image_only_start {
+                    html_output.replace_range(at..at + "<p>".len(), r#"<p class="image-only">"#);
+                }
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 in_heading = true;
@@ -623,5 +655,30 @@ mod tests {
             !html.contains("data:"),
             "data: must only survive as an image, got: {html}"
         );
+    }
+
+    #[test]
+    fn test_image_alone_in_paragraph_is_marked_for_centering() {
+        let html = render_in("![a](https://x.com/a.png)", Path::new("."));
+        assert!(
+            html.contains(r#"<p class="image-only"><img"#),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_image_row_is_marked_for_centering() {
+        let html = render_in(
+            "![a](https://x.com/a.png) ![b](https://x.com/b.png)\n![c](https://x.com/c.png)",
+            Path::new("."),
+        );
+        assert!(html.contains(r#"<p class="image-only">"#), "got: {html}");
+    }
+
+    #[test]
+    fn test_image_inside_text_stays_inline() {
+        let html = render_in("see ![a](https://x.com/a.png) here", Path::new("."));
+        assert!(!html.contains("image-only"), "got: {html}");
+        assert!(html.contains("<p>see <img"), "got: {html}");
     }
 }

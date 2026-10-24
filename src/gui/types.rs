@@ -382,6 +382,10 @@ table tbody tr:hover {{
 }}
 img {{
     max-width: 100%;
+    max-height: 80vh;
+}}
+p.image-only {{
+    text-align: center;
 }}
 /* Ensure mermaid diagrams are visible in both themes */
 .mermaid .node rect,
